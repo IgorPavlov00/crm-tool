@@ -24,6 +24,7 @@ interface AuthContextType {
   session: Session | null;
   profile: UserProfile | null;
   loading: boolean;
+  inviteTenantName: string | null;
   signUp: (
     email: string,
     password: string,
@@ -40,7 +41,10 @@ interface AuthContextType {
     practiceName: string,
     fullName?: string,
   ) => Promise<{ error?: string }>;
+  clearInvite: () => void;
 }
+
+const INVITE_STORAGE_KEY = "pending_invite_token";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -57,8 +61,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [inviteTenantName, setInviteTenantName] = useState<string | null>(null);
 
   const backendBase = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+  const clearInvite = () => {
+    sessionStorage.removeItem(INVITE_STORAGE_KEY);
+    setInviteTenantName(null);
+  };
+
+  // Pick up ?invite=<token> from a shared team-invite link, stash it for the
+  // duration of the signup/login flow (it must survive the Google OAuth
+  // round-trip and, for email signup, the "confirm your email" detour).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const inviteToken = params.get("invite");
+    if (inviteToken) {
+      sessionStorage.setItem(INVITE_STORAGE_KEY, inviteToken);
+      params.delete("invite");
+      const newSearch = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        window.location.pathname + (newSearch ? `?${newSearch}` : ""),
+      );
+    }
+
+    const pending = sessionStorage.getItem(INVITE_STORAGE_KEY);
+    if (pending) {
+      axios
+        .get(`${backendBase}/auth/invite-info`, { params: { token: pending } })
+        .then((res) => setInviteTenantName(res.data.tenant_name))
+        .catch(() => {
+          // Invalid/expired invite link - drop it so the user can sign up normally.
+          sessionStorage.removeItem(INVITE_STORAGE_KEY);
+        });
+    }
+  }, [backendBase]);
 
   const applyTenantToAxios = (tenantId?: number | null) => {
     if (tenantId) {
@@ -72,6 +111,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const fetchProfile = useCallback(
     async (user: User): Promise<UserProfile | null> => {
+      const inviteToken = sessionStorage.getItem(INVITE_STORAGE_KEY);
+
+      if (inviteToken) {
+        try {
+          const res = await axios.post(`${backendBase}/auth/join-tenant`, {
+            supabase_user_id: user.id,
+            email: user.email,
+            full_name:
+              user.user_metadata?.full_name ||
+              user.user_metadata?.name ||
+              null,
+            invite_token: inviteToken,
+          });
+
+          const joinedProfile: UserProfile = res.data;
+          applyTenantToAxios(joinedProfile.tenant_id);
+          clearInvite();
+
+          return joinedProfile;
+        } catch (err) {
+          console.error("Error joining tenant via invite:", err);
+          clearInvite();
+          // fall through to the normal login-profile lookup below
+        }
+      }
+
       try {
         const res = await axios.post(`${backendBase}/auth/login-profile`, {
           supabase_user_id: user.id,
@@ -162,6 +227,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, [fetchProfile]);
 
+  // Creates a brand-new tenant, or joins one via a pending invite token.
+  const createOrJoinProfile = async (
+    supabaseUserId: string,
+    email: string,
+    fullName: string,
+    practiceName: string,
+  ): Promise<UserProfile> => {
+    const inviteToken = sessionStorage.getItem(INVITE_STORAGE_KEY);
+
+    if (inviteToken) {
+      try {
+        const res = await axios.post(`${backendBase}/auth/join-tenant`, {
+          supabase_user_id: supabaseUserId,
+          email,
+          full_name: fullName,
+          invite_token: inviteToken,
+        });
+        clearInvite();
+        return res.data;
+      } catch (err) {
+        console.error("Error joining tenant via invite:", err);
+        clearInvite();
+        // fall through and create a new practice instead
+      }
+    }
+
+    const res = await axios.post(`${backendBase}/auth/register-profile`, {
+      supabase_user_id: supabaseUserId,
+      email,
+      full_name: fullName,
+      practice_name: practiceName,
+    });
+    return res.data;
+  };
+
   const signUp = async (
     email: string,
     password: string,
@@ -185,12 +285,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     if (!data.session) {
       try {
-        await axios.post(`${backendBase}/auth/register-profile`, {
-          supabase_user_id: data.user.id,
-          email,
-          full_name: fullName,
-          practice_name: practiceName,
-        });
+        await createOrJoinProfile(data.user.id, email, fullName, practiceName);
       } catch (err: any) {
         console.error("Error creating profile:", err);
       }
@@ -198,14 +293,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     try {
-      const res = await axios.post(`${backendBase}/auth/register-profile`, {
-        supabase_user_id: data.user.id,
+      const createdProfile = await createOrJoinProfile(
+        data.user.id,
         email,
-        full_name: fullName,
-        practice_name: practiceName,
-      });
-
-      const createdProfile: UserProfile = res.data;
+        fullName,
+        practiceName,
+      );
       applyTenantToAxios(createdProfile.tenant_id);
       setProfile(createdProfile);
 
@@ -241,10 +334,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const signInWithGoogle = async () => {
+    const inviteToken = sessionStorage.getItem(INVITE_STORAGE_KEY);
+    const redirectTo = inviteToken
+      ? `${window.location.origin}/?invite=${encodeURIComponent(inviteToken)}`
+      : window.location.origin;
+
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: window.location.origin,
+        redirectTo,
       },
     });
   };
@@ -256,14 +354,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!user) return { error: "Niste prijavljeni" };
 
     try {
-      const res = await axios.post(`${backendBase}/auth/register-profile`, {
-        supabase_user_id: user.id,
-        email: user.email,
-        full_name: fullName || user.user_metadata?.full_name || user.email,
-        practice_name: practiceName,
-      });
-
-      const createdProfile: UserProfile = res.data;
+      const createdProfile = await createOrJoinProfile(
+        user.id,
+        user.email || "",
+        fullName || user.user_metadata?.full_name || user.email || "",
+        practiceName,
+      );
       applyTenantToAxios(createdProfile.tenant_id);
       setProfile(createdProfile);
 
@@ -290,11 +386,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         session,
         profile,
         loading,
+        inviteTenantName,
         signUp,
         signIn,
         signInWithGoogle,
         signOut,
         createProfile,
+        clearInvite,
       }}
     >
       {children}

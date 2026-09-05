@@ -1,6 +1,7 @@
 import uvicorn
 import os, json
 import time as time_module
+import hmac, hashlib, base64
 import logging
 from fastapi import Depends, FastAPI, HTTPException, Request, status, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +23,10 @@ import resend
 import os
 
 resend.api_key = os.getenv("RESEND_API_KEY")
+
+# Secret used to sign team-invite tokens (set INVITE_SECRET in production envs)
+INVITE_SECRET = os.getenv("INVITE_SECRET", "dev-insecure-invite-secret-change-me")
+INVITE_TOKEN_TTL_SECONDS = 7 * 24 * 3600  # invite links are valid for 7 days
 
 ############################################
 #
@@ -2408,7 +2413,36 @@ class JoinTenantRequest(PydanticBaseModel):
     supabase_user_id: str
     email: str
     full_name: str | None = None
-    tenant_id: int
+    invite_token: str
+
+
+def create_invite_token(tenant_id: int) -> str:
+    """Signed, expiring token that encodes a tenant_id for team-invite links."""
+    payload = json.dumps({
+        "tenant_id": tenant_id,
+        "exp": int(time_module.time()) + INVITE_TOKEN_TTL_SECONDS,
+    }).encode()
+    payload_b64 = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
+    sig = hmac.new(INVITE_SECRET.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{payload_b64}.{sig}"
+
+
+def verify_invite_token(token: str) -> int:
+    """Validates a team-invite token and returns the tenant_id it encodes."""
+    try:
+        payload_b64, sig = token.split(".", 1)
+        expected_sig = hmac.new(INVITE_SECRET.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expected_sig):
+            raise ValueError("bad signature")
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        if payload["exp"] < time_module.time():
+            raise HTTPException(status_code=400, detail="Link za pozivnicu je istekao")
+        return int(payload["tenant_id"])
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Nevažeći link za pozivnicu")
 
 
 @app.post("/auth/register-profile", tags=["Auth"])
@@ -2503,7 +2537,9 @@ def join_tenant(
         data: JoinTenantRequest,
         database: Session = Depends(get_db)
 ):
-    """New user joins an existing tenant (invited by owner)."""
+    """New user joins an existing tenant via a signed team-invite link."""
+    tenant_id = verify_invite_token(data.invite_token)
+
     existing = database.query(UserProfile).filter(
         UserProfile.supabase_user_id == data.supabase_user_id
     ).first()
@@ -2520,7 +2556,7 @@ def join_tenant(
             "tenant_name": tenant.name if tenant else ""
         }
 
-    tenant = database.query(Tenant).filter(Tenant.id == data.tenant_id).first()
+    tenant = database.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
@@ -2529,7 +2565,7 @@ def join_tenant(
         email=data.email,
         full_name=data.full_name,
         role="member",
-        tenant_id=data.tenant_id
+        tenant_id=tenant_id
     )
     database.add(new_profile)
     database.commit()
@@ -2544,6 +2580,59 @@ def join_tenant(
         "tenant_id": new_profile.tenant_id,
         "tenant_name": tenant.name
     }
+
+
+@app.get("/auth/invite-link", tags=["Auth"])
+def get_invite_link(
+        tenant_id: int = Depends(get_tenant_id),
+        database: Session = Depends(get_db)
+):
+    """Generates a signed invite token for the caller's current tenant."""
+    tenant = database.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return {
+        "invite_token": create_invite_token(tenant_id),
+        "tenant_id": tenant_id,
+        "tenant_name": tenant.name,
+        "expires_in_seconds": INVITE_TOKEN_TTL_SECONDS,
+    }
+
+
+@app.get("/auth/invite-info", tags=["Auth"])
+def get_invite_info(
+        token: str,
+        database: Session = Depends(get_db)
+):
+    """Public lookup so an invitee can see which practice they're joining before signing up."""
+    tenant_id = verify_invite_token(token)
+    tenant = database.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return {"tenant_id": tenant.id, "tenant_name": tenant.name}
+
+
+@app.get("/auth/team-members", tags=["Auth"])
+def list_team_members(
+        tenant_id: int = Depends(get_tenant_id),
+        database: Session = Depends(get_db)
+):
+    """Lists everyone belonging to the caller's current tenant."""
+    members = database.query(UserProfile).filter(
+        UserProfile.tenant_id == tenant_id
+    ).order_by(UserProfile.created_at).all()
+
+    return [
+        {
+            "user_id": m.id,
+            "email": m.email,
+            "full_name": m.full_name,
+            "role": m.role,
+        }
+        for m in members
+    ]
 
 ############################################
 # Maintaining the server

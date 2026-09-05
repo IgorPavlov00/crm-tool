@@ -1,10 +1,17 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
 
 type AuthView = "login" | "register" | "setup-practice";
 
 const AuthPage: React.FC = () => {
-  const { signIn, signUp, signInWithGoogle, createProfile, user } = useAuth();
+  const {
+    signIn,
+    signUp,
+    signInWithGoogle,
+    createProfile,
+    user,
+    inviteTenantName,
+  } = useAuth();
   const [view, setView] = useState<AuthView>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -13,6 +20,12 @@ const AuthPage: React.FC = () => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+
+  // A shared invite link means this person almost certainly doesn't have an
+  // account yet - default straight to the registration form for them.
+  useEffect(() => {
+    if (inviteTenantName) setView("register");
+  }, [inviteTenantName]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,9 +112,13 @@ const AuthPage: React.FC = () => {
                   <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
                 </svg>
               </div>
-              <h1 className="auth-title">Podešavanje prakse</h1>
+              <h1 className="auth-title">
+                {inviteTenantName ? "Pridružite se timu" : "Podešavanje prakse"}
+              </h1>
               <p className="auth-subtitle">
-                Unesite naziv vaše prakse ili klinike
+                {inviteTenantName
+                  ? `Pridružujete se praksi "${inviteTenantName}"`
+                  : "Unesite naziv vaše prakse ili klinike"}
               </p>
             </div>
 
@@ -118,16 +135,18 @@ const AuthPage: React.FC = () => {
                 />
               </div>
 
-              <div className="auth-field">
-                <label>Naziv prakse *</label>
-                <input
-                  type="text"
-                  value={practiceName}
-                  onChange={(e) => setPracticeName(e.target.value)}
-                  placeholder="Maja's Praksa"
-                  required
-                />
-              </div>
+              {!inviteTenantName && (
+                <div className="auth-field">
+                  <label>Naziv prakse *</label>
+                  <input
+                    type="text"
+                    value={practiceName}
+                    onChange={(e) => setPracticeName(e.target.value)}
+                    placeholder="Maja's Praksa"
+                    required
+                  />
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -166,9 +185,11 @@ const AuthPage: React.FC = () => {
             {view === "login" ? "Dobrodošli nazad" : "Kreirajte nalog"}
           </h1>
           <p className="auth-subtitle">
-            {view === "login"
-              ? "Prijavite se u svoju praksu"
-              : "Započnite upravljanje svojom praksom"}
+            {inviteTenantName
+              ? `Pridružujete se praksi "${inviteTenantName}"`
+              : view === "login"
+                ? "Prijavite se u svoju praksu"
+                : "Započnite upravljanje svojom praksom"}
           </p>
         </div>
 
@@ -224,16 +245,18 @@ const AuthPage: React.FC = () => {
                 />
               </div>
 
-              <div className="auth-field">
-                <label>Naziv prakse</label>
-                <input
-                  type="text"
-                  value={practiceName}
-                  onChange={(e) => setPracticeName(e.target.value)}
-                  placeholder="Maja's Praksa"
-                  required
-                />
-              </div>
+              {!inviteTenantName && (
+                <div className="auth-field">
+                  <label>Naziv prakse</label>
+                  <input
+                    type="text"
+                    value={practiceName}
+                    onChange={(e) => setPracticeName(e.target.value)}
+                    placeholder="Maja's Praksa"
+                    required
+                  />
+                </div>
+              )}
             </>
           )}
 

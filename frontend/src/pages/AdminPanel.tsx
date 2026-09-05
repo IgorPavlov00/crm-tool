@@ -1,8 +1,16 @@
 import React, { useState } from "react";
 import { TableBlock } from "../components/runtime/TableBlock";
 import Dashboard from "./Dashboard";
+import TeamPanel from "./TeamPanel";
+import { useAuth } from "../contexts/AuthContext";
 // const tenantId = localStorage.getItem("tenant_id");
-const tabs = [
+const tabs: {
+  key: string;
+  label: string;
+  mobileLabel: string;
+  icon: React.ReactNode;
+  ownerOnly?: boolean;
+}[] = [
   {
     key: "klijent",
     label: "Klijenti",
@@ -103,6 +111,29 @@ const tabs = [
         <line x1="18" y1="20" x2="18" y2="10" />
         <line x1="12" y1="20" x2="12" y2="4" />
         <line x1="6" y1="20" x2="6" y2="14" />
+      </svg>
+    ),
+  },
+  {
+    key: "tim",
+    label: "Tim",
+    mobileLabel: "Tim",
+    ownerOnly: true,
+    icon: (
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <line x1="19" y1="8" x2="19" y2="14" />
+        <line x1="22" y1="11" x2="16" y2="11" />
       </svg>
     ),
   },
@@ -458,9 +489,13 @@ const tableConfigs: Record<string, any> = {
 };
 
 const AdminPanel: React.FC = () => {
+  const { profile } = useAuth();
   const [activeTab, setActiveTab] = useState("klijent");
   const [animating, setAnimating] = useState(false);
   const config = tableConfigs[activeTab];
+  const visibleTabs = tabs.filter(
+    (tab) => !tab.ownerOnly || profile?.role === "owner",
+  );
 
   const handleTabChange = (key: string) => {
     if (key === activeTab) return;
@@ -488,7 +523,7 @@ const AdminPanel: React.FC = () => {
       </div>
 
       <div className="admin-tabs">
-        {tabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button
             key={tab.key}
             className={`admin-tab ${activeTab === tab.key ? "active" : ""}`}
@@ -506,6 +541,8 @@ const AdminPanel: React.FC = () => {
       >
         {activeTab === "statistika" ? (
           <Dashboard />
+        ) : activeTab === "tim" ? (
+          <TeamPanel />
         ) : config ? (
           <TableBlock
             key={activeTab}
