@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PsihoApp Privacy Policy</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --text: #1e293b;
+    --text-muted: #64748b;
+    --text-faint: #94a3b8;
+    --border: #e2e8f0;
+    --accent: #6366f1;
+    --accent-2: #7c3aed;
+    --accent-soft: #eef2ff;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --surface: #161f36;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --text-faint: #64748b;
+      --border: #263050;
+      --accent: #818cf8;
+      --accent-2: #a78bfa;
+      --accent-soft: #1e2547;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  img { max-width: 100%; }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+    display: grid;
+    grid-template-columns: 220px minmax(0, 700px);
+    gap: 64px;
+    justify-content: center;
+  }
+
+  @media (max-width: 900px) {
+    .page { grid-template-columns: minmax(0, 1fr); }
+    .toc { display: none; }
+  }
+
+  header.doc-head {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 32px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .mark {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .mark svg { width: 24px; height: 24px; }
+
+  .brand-block { display: flex; flex-direction: column; gap: 2px; }
+
+  .brand-name {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-weight: 600;
+    font-size: 20px;
+    letter-spacing: -0.01em;
+  }
+
+  .doc-kicker {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .doc-meta {
+    margin-left: auto;
+    text-align: right;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--text-faint);
+    line-height: 1.8;
+  }
+
+  nav.toc {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 4px;
+  }
+
+  nav.toc a {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    padding: 7px 10px;
+    margin: 0 -10px;
+    border-radius: 7px;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 13.5px;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  nav.toc a:hover, nav.toc a:focus-visible {
+    background: var(--accent-soft);
+    color: var(--accent);
+    outline: none;
+  }
+
+  nav.toc .n {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--text-faint);
+    width: 16px;
+    flex-shrink: 0;
+  }
+
+  main { min-width: 0; }
+
+  .lede {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 21px;
+    line-height: 1.55;
+    color: var(--text);
+    margin: 0 0 28px;
+    text-wrap: balance;
+  }
+
+  .callout {
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    border-radius: 10px;
+    padding: 16px 18px;
+    font-size: 14px;
+    color: var(--text);
+    margin: 0 0 40px;
+    line-height: 1.6;
+  }
+
+  .callout strong { color: var(--accent); }
+
+  section.doc-section {
+    padding: 40px 0;
+    border-top: 1px solid var(--border);
+    scroll-margin-top: 32px;
+  }
+
+  section.doc-section:first-of-type { border-top: none; padding-top: 0; }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin: 0 0 16px;
+  }
+
+  .section-num {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  h2 {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-weight: 600;
+    font-size: 24px;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  p { margin: 0 0 14px; color: var(--text); max-width: 66ch; }
+  p.muted { color: var(--text-muted); font-size: 14.5px; }
+
+  ul { margin: 0 0 14px; padding-left: 20px; max-width: 66ch; }
+  li { margin-bottom: 8px; }
+  li::marker { color: var(--accent); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 20px;
+    font-size: 14px;
+  }
+
+  .table-wrap { overflow-x: auto; }
+
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  th {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  td { color: var(--text); }
+  td.mut { color: var(--text-muted); }
+
+  a.inline { color: var(--accent); text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  a.inline:hover { text-decoration-color: var(--accent); }
+
+  footer.doc-foot {
+    grid-column: 1 / -1;
+    margin-top: 24px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--text-faint);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="doc-head">
+    <div class="mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+      </svg>
+    </div>
+    <div class="brand-block">
+      <span class="brand-name">PsihoApp</span>
+      <span class="doc-kicker">Privacy Policy</span>
+    </div>
+    <div class="doc-meta">
+      Effective&nbsp;date: 5&nbsp;Sept&nbsp;2026<br>
+      Version&nbsp;1.0
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Sections">
+    <a href="#scope"><span class="n">01</span>Scope</a>
+    <a href="#collect"><span class="n">02</span>Data we collect</a>
+    <a href="#use"><span class="n">03</span>How we use it</a>
+    <a href="#basis"><span class="n">04</span>Legal basis</a>
+    <a href="#sharing"><span class="n">05</span>Who we share with</a>
+    <a href="#retention"><span class="n">06</span>Retention</a>
+    <a href="#security"><span class="n">07</span>Security</a>
+    <a href="#rights"><span class="n">08</span>Your rights</a>
+    <a href="#children"><span class="n">09</span>Children</a>
+    <a href="#changes"><span class="n">10</span>Changes</a>
+    <a href="#contact"><span class="n">11</span>Contact</a>
+  </nav>
+
+  <main>
+    <p class="lede">PsihoApp is scheduling and client-management software used by independent therapy and psychology practices to run their day-to-day work — sessions, groups, and payments.</p>
+
+    <div class="callout">
+      <strong>Plain-language summary:</strong> we store the account details you sign in with, and the client, session, and payment records your practice enters. We don't sell any of it. Practice data is kept separate, practice by practice. Full detail below.
+    </div>
+
+    <section class="doc-section" id="scope">
+      <div class="section-head"><span class="section-num">01</span><h2>Scope</h2></div>
+      <p>This policy covers PsihoApp's web application and the accounts created within it. It applies to two kinds of people: <strong>practitioners</strong> who sign up to run their practice on PsihoApp, and <strong>clients</strong> whose contact and appointment details a practitioner enters into their own practice's records.</p>
+      <p class="muted">If your practice is subject to health-data regulation in your jurisdiction (for example GDPR's special-category data, or a local equivalent of HIPAA), you remain the data controller for the client records you enter — PsihoApp acts as your processor. Speak with your own counsel about what that means for your intake and consent process.</p>
+    </section>
+
+    <section class="doc-section" id="collect">
+      <div class="section-head"><span class="section-num">02</span><h2>Data we collect</h2></div>
+      <p>We collect only what the app needs to schedule sessions, manage clients, and let you sign in.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Category</th><th>What's included</th><th>Where it comes from</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Account data</strong></td>
+              <td class="mut">Name, email address, and — if you sign in with Google — the name and email your Google account shares with us.</td>
+              <td class="mut">You, at sign-up</td>
+            </tr>
+            <tr>
+              <td><strong>Practice data</strong></td>
+              <td class="mut">Your practice name, and the roles of anyone you invite to it (owner or member).</td>
+              <td class="mut">You, when setting up or inviting</td>
+            </tr>
+            <tr>
+              <td><strong>Client records</strong></td>
+              <td class="mut">Name, phone number, and email address of the clients you add to your practice.</td>
+              <td class="mut">You, entered manually</td>
+            </tr>
+            <tr>
+              <td><strong>Session &amp; payment records</strong></td>
+              <td class="mut">Appointment times, session price, payment status and method, and group membership.</td>
+              <td class="mut">You, entered manually</td>
+            </tr>
+            <tr>
+              <td><strong>Technical data</strong></td>
+              <td class="mut">Basic request logs (IP address, timestamps) kept for security and troubleshooting.</td>
+              <td class="mut">Generated automatically</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">We do not collect payment card numbers — PsihoApp only records that a payment happened, not how to charge one.</p>
+    </section>
+
+    <section class="doc-section" id="use">
+      <div class="section-head"><span class="section-num">03</span><h2>How we use it</h2></div>
+      <ul>
+        <li>To run the core product: showing your client list, calendar, and payment history.</li>
+        <li>To send session-related emails — confirmations, changes, and cancellations — to the client email addresses you enter.</li>
+        <li>To authenticate you and keep your practice's data separate from every other practice on PsihoApp.</li>
+        <li>To keep the service secure and to diagnose problems when something breaks.</li>
+      </ul>
+      <p>We do not use client records for advertising, and we do not sell personal data to anyone, ever.</p>
+    </section>
+
+    <section class="doc-section" id="basis">
+      <div class="section-head"><span class="section-num">04</span><h2>Legal basis</h2></div>
+      <p>Where GDPR or a similar framework applies: we process account data under <strong>contract</strong> (to provide the service you signed up for), and practices process their own client data under whatever legal basis they establish with their clients — typically consent or a service agreement between the practitioner and the client. PsihoApp itself acts as a processor for that client data, not the controller.</p>
+    </section>
+
+    <section class="doc-section" id="sharing">
+      <div class="section-head"><span class="section-num">05</span><h2>Who we share with</h2></div>
+      <p>We use a small number of infrastructure providers to run PsihoApp. None of them can use your data for their own purposes.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Provider</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Supabase</td><td class="mut">Authentication (email/password and Google sign-in)</td></tr>
+            <tr><td>Render</td><td class="mut">Application hosting and database</td></tr>
+            <tr><td>Resend</td><td class="mut">Delivering session confirmation and reminder emails</td></tr>
+            <tr><td>Google</td><td class="mut">Optional sign-in via Google OAuth, if you choose it</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">We disclose data beyond these providers only if legally required to, or with your explicit direction.</p>
+    </section>
+
+    <section class="doc-section" id="retention">
+      <div class="section-head"><span class="section-num">06</span><h2>Retention</h2></div>
+      <p>We keep account and practice data for as long as your account is active. Client and session records are kept for as long as your practice keeps them in the app — you can edit or delete individual client and session entries at any time from the Admin Panel. If you close your account, we delete your practice's data within a reasonable period, except where we're required to retain it for legal or accounting reasons.</p>
+    </section>
+
+    <section class="doc-section" id="security">
+      <div class="section-head"><span class="section-num">07</span><h2>Security</h2></div>
+      <ul>
+        <li><strong>Tenant isolation</strong> — every practice's clients, sessions, and payments are scoped to that practice and never visible to another practice.</li>
+        <li><strong>Encrypted transport</strong> — all traffic between your browser and PsihoApp is sent over HTTPS.</li>
+        <li><strong>Scoped invites</strong> — team invite links are signed and expire after seven days, so a practice can only be joined by someone holding a link the owner actually sent.</li>
+      </ul>
+      <p class="muted">No system is perfectly secure. If you believe you've found a vulnerability, please contact us using the details below before disclosing it publicly.</p>
+    </section>
+
+    <section class="doc-section" id="rights">
+      <div class="section-head"><span class="section-num">08</span><h2>Your rights</h2></div>
+      <p>Depending on where you live, you may have the right to access, correct, export, or delete the personal data we hold about you. Practitioners can self-serve most of this from the Admin Panel. If you're a client of a PsihoApp practice and want to exercise these rights over your own records, please contact your practitioner directly — they control that data. For anything involving your own account data, contact us using the details below.</p>
+    </section>
+
+    <section class="doc-section" id="children">
+      <div class="section-head"><span class="section-num">09</span><h2>Children</h2></div>
+      <p>PsihoApp accounts are intended for practitioners aged 18 and over. Client records may of course belong to minors, entered and managed on their behalf by the practitioner responsible for their care.</p>
+    </section>
+
+    <section class="doc-section" id="changes">
+      <div class="section-head"><span class="section-num">10</span><h2>Changes to this policy</h2></div>
+      <p>If we make material changes to this policy, we'll update the effective date above and, where appropriate, notify practice owners by email.</p>
+    </section>
+
+    <section class="doc-section" id="contact">
+      <div class="section-head"><span class="section-num">11</span><h2>Contact</h2></div>
+      <p>Questions about this policy or your data can be sent to <a class="inline" href="mailto:igorpavlov106@gmail.com">igorpavlov106@gmail.com</a>.</p>
+    </section>
+  </main>
+
+  <footer class="doc-foot">
+    <span>© 2026 PsihoApp — Upravljanje praksom</span>
+    <span>This document is a starting template, not legal advice — have it reviewed for your jurisdiction before relying on it.</span>
+  </footer>
+</div>
+</body>
+</html>
