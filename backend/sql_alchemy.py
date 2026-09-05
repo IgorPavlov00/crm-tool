@@ -34,6 +34,11 @@ class Tenant(Base):
     working_hours: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON, keyed by weekday "0"-"6"
     default_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # Billing - free trial, then a manually-confirmed monthly subscription
+    # (no card processor yet; see /internal/mark-subscription-paid).
+    trial_ends_at: Mapped[Optional[dt_datetime]] = mapped_column(DateTime, nullable=True)
+    subscription_paid_until: Mapped[Optional[dt_datetime]] = mapped_column(DateTime, nullable=True)
+
     klijenti = relationship("Klijent", backref="tenant")
     grupe = relationship("Grupa", backref="tenant")
     sesije = relationship("Sesija", backref="tenant")
