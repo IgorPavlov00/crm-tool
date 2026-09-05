@@ -175,32 +175,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   useEffect(() => {
     let mounted = true;
 
-    const initAuth = async () => {
-      const {
-        data: { session: s },
-      } = await supabase.auth.getSession();
-
-      if (!mounted) return;
-
-      setSession(s);
-      setUser(s?.user ?? null);
-
-      if (s?.user) {
-        const p = await fetchProfile(s.user);
-        if (!mounted) return;
-        setProfile(p);
-      } else {
-        setProfile(null);
-        applyTenantToAxios(null);
-      }
-
-      if (mounted) {
-        setLoading(false);
-      }
-    };
-
-    initAuth();
-
+    // supabase-js fires this listener immediately on subscribe with the
+    // current session (event "INITIAL_SESSION"), then again on every
+    // subsequent change - so this one listener covers both the initial
+    // load and later sign-in/sign-out events. A separate getSession() +
+    // fetchProfile() call here would race this one (both reading/clearing
+    // the same pending-invite token concurrently), so don't add one.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, s) => {
