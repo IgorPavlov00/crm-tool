@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from "react";
+import { Routes, Route } from "react-router-dom";
 import { TableProvider } from "./contexts/TableContext";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import AdminPanel from "./pages/AdminPanel";
 import Calendar from "./pages/Calendar";
 import AuthPage from "./pages/AuthPage";
+import FindTherapist from "./pages/FindTherapist";
 import "./App.css";
 import "./pages/Auth.css";
 
@@ -344,9 +346,17 @@ const AppContent: React.FC = () => {
 // ============================================
 function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <Routes>
+      <Route path="/find-therapist" element={<FindTherapist />} />
+      <Route
+        path="/*"
+        element={
+          <AuthProvider>
+            <AppContent />
+          </AuthProvider>
+        }
+      />
+    </Routes>
   );
 }
 

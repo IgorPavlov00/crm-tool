@@ -3,12 +3,13 @@ import os, json
 import time as time_module
 import hmac, hashlib, base64
 import logging
+from datetime import datetime, timedelta, time as dt_time
 from fastapi import Depends, FastAPI, HTTPException, Request, status, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, ProgrammingError
 from pydantic_classes import *
 from sql_alchemy import *
 import io
@@ -54,6 +55,25 @@ def get_tenant_id(request: Request) -> int:
     return int(tenant_id)
 
 
+def run_light_migrations(engine):
+    """Add columns introduced after the initial deploy. create_all() only
+    creates missing TABLES, not missing columns on tables that already
+    exist, so new nullable columns are added here instead - idempotent,
+    safe to run on every startup."""
+    statements = [
+        "ALTER TABLE tenant ADD COLUMN specialties TEXT",
+        "ALTER TABLE tenant ADD COLUMN working_hours TEXT",
+        "ALTER TABLE tenant ADD COLUMN default_price FLOAT",
+    ]
+    with engine.connect() as conn:
+        for stmt in statements:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except (OperationalError, ProgrammingError):
+                conn.rollback()
+
+
 def init_db():
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/Class_Diagram.db")
 
@@ -78,6 +98,7 @@ def init_db():
     )
 
     Base.metadata.create_all(bind=engine)
+    run_light_migrations(engine)
 
     return SessionLocal
 
@@ -2385,6 +2406,242 @@ def delete_klijent(
     database.delete(db_klijent)
     database.commit()
     return {"message": "Deleted", "id": klijent_id}
+
+
+############################################
+#
+#   Client-Facing Matching & Public Booking
+#
+############################################
+
+SLOT_MINUTES = 60
+
+
+def compute_available_slots(tenant_id: int, database: Session, days: int = 14):
+    """Working hours minus already-booked sessions, as 1-hour blocks for the
+    next `days` days. Naive local datetimes throughout, consistent with how
+    Sesija.pocetak/kraj are already stored and used elsewhere in this app."""
+    tenant = database.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant or not tenant.working_hours:
+        return []
+
+    try:
+        hours_by_weekday = json.loads(tenant.working_hours)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    now = datetime.utcnow()
+    range_end = now + timedelta(days=days)
+
+    existing_sessions = database.query(Sesija).filter(
+        Sesija.tenant_id == tenant_id,
+        Sesija.status != "otkazano",
+        Sesija.kraj >= now,
+        Sesija.pocetak <= range_end,
+    ).all()
+    booked_ranges = [(s.pocetak, s.kraj) for s in existing_sessions]
+
+    def overlaps(start, end):
+        return any(start < b_end and end > b_start for b_start, b_end in booked_ranges)
+
+    slots = []
+    for i in range(days):
+        day = (now + timedelta(days=i)).date()
+        config = hours_by_weekday.get(str(day.weekday()))
+        if not config or not config.get("active"):
+            continue
+        try:
+            start_h, start_m = (int(x) for x in config["start"].split(":"))
+            end_h, end_m = (int(x) for x in config["end"].split(":"))
+        except (KeyError, ValueError, AttributeError):
+            continue
+
+        cursor = datetime.combine(day, dt_time(start_h, start_m))
+        day_end = datetime.combine(day, dt_time(end_h, end_m))
+
+        while cursor + timedelta(minutes=SLOT_MINUTES) <= day_end:
+            slot_end = cursor + timedelta(minutes=SLOT_MINUTES)
+            if cursor > now and not overlaps(cursor, slot_end):
+                slots.append({"start": cursor, "end": slot_end})
+            cursor = slot_end
+
+    slots.sort(key=lambda s: s["start"])
+    return slots
+
+
+class TenantSettingsUpdate(BaseModel):
+    specialties: list[str] | None = None
+    working_hours: dict | None = None
+    default_price: float | None = None
+
+
+def _tenant_settings_payload(tenant: Tenant) -> dict:
+    return {
+        "tenant_id": tenant.id,
+        "name": tenant.name,
+        "specialties": tenant.specialties.split(",") if tenant.specialties else [],
+        "working_hours": json.loads(tenant.working_hours) if tenant.working_hours else {},
+        "default_price": tenant.default_price,
+    }
+
+
+@app.get("/tenant/settings", tags=["Tenant"])
+def get_tenant_settings(
+        tenant_id: int = Depends(get_tenant_id),
+        database: Session = Depends(get_db)
+):
+    tenant = database.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return _tenant_settings_payload(tenant)
+
+
+@app.put("/tenant/settings", tags=["Tenant"])
+def update_tenant_settings(
+        data: TenantSettingsUpdate,
+        tenant_id: int = Depends(get_tenant_id),
+        database: Session = Depends(get_db)
+):
+    tenant = database.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    if data.specialties is not None:
+        tenant.specialties = ",".join(s.strip() for s in data.specialties if s.strip())
+    if data.working_hours is not None:
+        tenant.working_hours = json.dumps(data.working_hours)
+    if data.default_price is not None:
+        tenant.default_price = data.default_price
+
+    database.commit()
+    database.refresh(tenant)
+    return _tenant_settings_payload(tenant)
+
+
+@app.get("/public/therapists", tags=["Public"])
+def public_search_therapists(
+        tags: str = "",
+        database: Session = Depends(get_db)
+):
+    """Cross-tenant client-facing search. No tenant header - same public,
+    read-only trust model as /auth/invite-info."""
+    requested = {t.strip() for t in tags.split(",") if t.strip()}
+
+    tenants = database.query(Tenant).filter(
+        Tenant.specialties.isnot(None), Tenant.specialties != ""
+    ).all()
+
+    results = []
+    for tenant in tenants:
+        tenant_tags = {t.strip() for t in tenant.specialties.split(",") if t.strip()}
+        matched = (tenant_tags & requested) if requested else tenant_tags
+        if requested and not matched:
+            continue
+
+        slots = compute_available_slots(tenant.id, database)
+        if not slots:
+            continue
+
+        results.append({
+            "tenant_id": tenant.id,
+            "name": tenant.name,
+            "specialties": sorted(tenant_tags),
+            "matched_tags": sorted(matched),
+            "match_count": len(matched),
+            "next_available": slots[0]["start"].isoformat(),
+        })
+
+    results.sort(key=lambda r: (-r["match_count"], r["next_available"]))
+    return results
+
+
+@app.get("/public/therapists/{tenant_id}/availability", tags=["Public"])
+def public_therapist_availability(
+        tenant_id: int,
+        days: int = 14,
+        database: Session = Depends(get_db)
+):
+    tenant = database.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    slots = compute_available_slots(tenant_id, database, days=min(days, 30))
+    return {
+        "tenant_id": tenant.id,
+        "name": tenant.name,
+        "slots": [
+            {"start": s["start"].isoformat(), "end": s["end"].isoformat()}
+            for s in slots
+        ],
+    }
+
+
+class PublicBookingRequest(BaseModel):
+    ime: str
+    prezime: str
+    email: str
+    telefon: str | None = None
+    napomena: str | None = None
+    pocetak: datetime
+    kraj: datetime
+
+
+@app.post("/public/therapists/{tenant_id}/book", tags=["Public"])
+def public_book_session(
+        tenant_id: int,
+        data: PublicBookingRequest,
+        database: Session = Depends(get_db)
+):
+    tenant = database.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Re-validate server-side - the client only saw a snapshot of availability,
+    # and this endpoint is unauthenticated so nothing about the request can be trusted.
+    available = compute_available_slots(tenant_id, database)
+    if not any(s["start"] == data.pocetak and s["end"] == data.kraj for s in available):
+        raise HTTPException(status_code=409, detail="Traženi termin više nije dostupan")
+
+    klijent = database.query(Klijent).filter(
+        Klijent.tenant_id == tenant_id, Klijent.email == data.email
+    ).first()
+    if not klijent:
+        klijent = Klijent(
+            tenant_id=tenant_id,
+            ime=data.ime,
+            prezime=data.prezime,
+            email=data.email,
+            broj_telefona=data.telefon,
+        )
+        database.add(klijent)
+        database.flush()
+
+    sesija = Sesija(
+        tenant_id=tenant_id,
+        pocetak=data.pocetak,
+        kraj=data.kraj,
+        cena=tenant.default_price or 0,
+        status="zakazano",
+    )
+    database.add(sesija)
+    database.flush()
+
+    database.add(SesijaKlijent(
+        tenant_id=tenant_id,
+        klijent_id=klijent.id,
+        sesija_id=sesija.id,
+    ))
+
+    database.commit()
+    database.refresh(sesija)
+
+    return {
+        "sesija_id": sesija.id,
+        "tenant_name": tenant.name,
+        "klijent_ime": f"{klijent.ime} {klijent.prezime}",
+        "pocetak": sesija.pocetak.isoformat(),
+        "kraj": sesija.kraj.isoformat(),
+    }
 
 
 ############################################
