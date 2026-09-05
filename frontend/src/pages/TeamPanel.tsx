@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { useAuth } from "../contexts/AuthContext";
+import ClientProfileSettings from "../components/ClientProfileSettings";
 
 interface TeamMember {
   user_id: number;
@@ -166,6 +167,8 @@ const TeamPanel: React.FC = () => {
           </div>
         )}
       </div>
+
+      <ClientProfileSettings />
     </div>
   );
 };

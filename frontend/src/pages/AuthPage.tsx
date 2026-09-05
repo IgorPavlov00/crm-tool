@@ -331,6 +331,12 @@ const AuthPage: React.FC = () => {
       </div>
 
       <div className="auth-footer">
+        <p>
+          Tražite terapeuta?{" "}
+          <a href="/find-therapist" style={{ color: "#6366f1", fontWeight: 600 }}>
+            Pronađite ga ovde
+          </a>
+        </p>
         <p>© 2026 PsihoApp — Upravljanje praksom</p>
       </div>
     </div>
