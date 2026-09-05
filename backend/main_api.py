@@ -2664,6 +2664,23 @@ Hvala vam na poverenju. <strong style="color:#6b7280;">PsihoApp</strong>
         logger.error(f"Failed to send booking notification to therapist: {e}")
 
 
+@app.get("/public/debug-email", tags=["Public"])
+def debug_email_send(to: str):
+    """TEMPORARY - remove once email delivery is confirmed working.
+    Surfaces the raw Resend exception directly in the response, since
+    normal booking emails swallow send errors into server logs only."""
+    try:
+        result = resend.Emails.send({
+            "from": "PsihoApp <noreply@hrioapp.com>",
+            "to": [to],
+            "subject": "Test email - PsihoApp debug",
+            "html": "<p>Ovo je test email.</p>",
+        })
+        return {"ok": True, "result": result, "api_key_set": bool(resend.api_key)}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_type": type(e).__name__, "api_key_set": bool(resend.api_key)}
+
+
 @app.post("/public/therapists/{tenant_id}/book", tags=["Public"])
 def public_book_session(
         tenant_id: int,
