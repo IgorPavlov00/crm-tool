@@ -83,7 +83,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       window.history.replaceState(
         {},
         "",
-        window.location.pathname + (newSearch ? `?${newSearch}` : ""),
+        window.location.pathname +
+          (newSearch ? `?${newSearch}` : "") +
+          window.location.hash,
       );
     }
 
