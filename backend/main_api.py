@@ -2470,6 +2470,7 @@ def compute_available_slots(tenant_id: int, database: Session, days: int = 14):
 
 
 class TenantSettingsUpdate(BaseModel):
+    name: str | None = None
     specialties: list[str] | None = None
     working_hours: dict | None = None
     default_price: float | None = None
@@ -2506,6 +2507,8 @@ def update_tenant_settings(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
+    if data.name is not None and data.name.strip():
+        tenant.name = data.name.strip()
     if data.specialties is not None:
         tenant.specialties = ",".join(s.strip() for s in data.specialties if s.strip())
     if data.working_hours is not None:
