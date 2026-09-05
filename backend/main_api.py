@@ -2534,6 +2534,135 @@ def delete_klijent(
 
 ############################################
 #
+#   Client Notes & Progress
+#
+############################################
+
+NAPOMENA_KATEGORIJE = {"opste", "napredak", "cilj", "upozorenje"}
+
+
+class KlijentNapomenaCreate(BaseModel):
+    tekst: str
+    kategorija: str = "opste"
+    author_name: str | None = None
+
+
+def _napomena_payload(n: KlijentNapomena) -> dict:
+    return {
+        "id": n.id,
+        "klijent_id": n.klijent_id,
+        "tekst": n.tekst,
+        "kategorija": n.kategorija,
+        "author_name": n.author_name,
+        "created_at": n.created_at.isoformat(),
+    }
+
+
+@app.get("/klijent/{klijent_id}/napomene", tags=["Klijent"])
+def list_klijent_napomene(
+        klijent_id: int,
+        tenant_id: int = Depends(require_active_subscription),
+        database: Session = Depends(get_db),
+):
+    klijent = database.query(Klijent).filter(
+        Klijent.id == klijent_id, Klijent.tenant_id == tenant_id
+    ).first()
+    if not klijent:
+        raise HTTPException(status_code=404, detail="Klijent not found")
+
+    notes = database.query(KlijentNapomena).filter(
+        KlijentNapomena.klijent_id == klijent_id, KlijentNapomena.tenant_id == tenant_id
+    ).order_by(KlijentNapomena.created_at.desc()).all()
+    return [_napomena_payload(n) for n in notes]
+
+
+@app.post("/klijent/{klijent_id}/napomene", tags=["Klijent"])
+def create_klijent_napomena(
+        klijent_id: int,
+        data: KlijentNapomenaCreate,
+        tenant_id: int = Depends(require_active_subscription),
+        database: Session = Depends(get_db),
+):
+    klijent = database.query(Klijent).filter(
+        Klijent.id == klijent_id, Klijent.tenant_id == tenant_id
+    ).first()
+    if not klijent:
+        raise HTTPException(status_code=404, detail="Klijent not found")
+    if not data.tekst.strip():
+        raise HTTPException(status_code=400, detail="Napomena ne može biti prazna")
+
+    note = KlijentNapomena(
+        tenant_id=tenant_id,
+        klijent_id=klijent_id,
+        tekst=data.tekst.strip(),
+        kategorija=data.kategorija if data.kategorija in NAPOMENA_KATEGORIJE else "opste",
+        author_name=data.author_name,
+    )
+    database.add(note)
+    database.commit()
+    database.refresh(note)
+    return _napomena_payload(note)
+
+
+@app.delete("/klijent/{klijent_id}/napomene/{napomena_id}", tags=["Klijent"])
+def delete_klijent_napomena(
+        klijent_id: int,
+        napomena_id: int,
+        tenant_id: int = Depends(require_active_subscription),
+        database: Session = Depends(get_db),
+):
+    note = database.query(KlijentNapomena).filter(
+        KlijentNapomena.id == napomena_id,
+        KlijentNapomena.klijent_id == klijent_id,
+        KlijentNapomena.tenant_id == tenant_id,
+    ).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Napomena not found")
+    database.delete(note)
+    database.commit()
+    return {"message": "Deleted", "id": napomena_id}
+
+
+@app.get("/klijent/{klijent_id}/sesije", tags=["Klijent"])
+def list_klijent_sesije(
+        klijent_id: int,
+        tenant_id: int = Depends(require_active_subscription),
+        database: Session = Depends(get_db),
+):
+    """A client's session history, for the progress view - reuses the
+    SesijaKlijent links rather than trusting a client-supplied filter."""
+    klijent = database.query(Klijent).filter(
+        Klijent.id == klijent_id, Klijent.tenant_id == tenant_id
+    ).first()
+    if not klijent:
+        raise HTTPException(status_code=404, detail="Klijent not found")
+
+    sesija_ids = [
+        row.sesija_id for row in database.query(SesijaKlijent).filter(
+            SesijaKlijent.klijent_id == klijent_id, SesijaKlijent.tenant_id == tenant_id
+        ).all()
+    ]
+    sessions = (
+        database.query(Sesija)
+        .filter(Sesija.id.in_(sesija_ids), Sesija.tenant_id == tenant_id)
+        .order_by(Sesija.pocetak.desc())
+        .all()
+        if sesija_ids else []
+    )
+    return [
+        {
+            "id": s.id,
+            "pocetak": s.pocetak.isoformat(),
+            "kraj": s.kraj.isoformat(),
+            "cena": s.cena,
+            "status": s.status,
+        }
+        for s in sessions
+    ]
+
+
+############################################
+#
 #   Client-Facing Matching & Public Booking
 #
 ############################################
