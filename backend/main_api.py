@@ -591,13 +591,27 @@ def require_active_subscription(
 #
 ############################################
 
+# Modern Supabase projects sign session tokens with an asymmetric key
+# (ES256) rather than a shared HS256 secret, published at this project's
+# JWKS endpoint - the standard, rotation-safe way to verify them (each
+# token names which key signed it via its "kid" header; PyJWKClient
+# fetches/caches the matching public key and never needs a secret at all).
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+SUPABASE_ISSUER = f"{SUPABASE_URL}/auth/v1" if SUPABASE_URL else None
+_jwks_client = jwt.PyJWKClient(f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json") if SUPABASE_URL else None
+
+# Legacy HS256 shared secret - only used as a fallback for projects that
+# haven't migrated to JWKS/asymmetric signing keys, or if SUPABASE_URL
+# isn't configured. Prefer setting SUPABASE_URL instead.
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
 
 def get_verified_supabase_user_id(request: Request) -> str:
-    """Verifies the bearer token's signature and expiry against Supabase's
-    project JWT secret and returns the verified `sub` claim (the Supabase
-    auth user id). Never trusts an unverified/self-reported id."""
+    """Verifies the bearer token's signature, expiry, audience and issuer,
+    and returns the verified `sub` claim (the Supabase auth user id).
+    Never trusts an unverified/self-reported id. Tries Supabase's JWKS
+    (ES256/RS256) first, then falls back to the legacy HS256 shared
+    secret if configured."""
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -605,20 +619,38 @@ def get_verified_supabase_user_id(request: Request) -> str:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    if not SUPABASE_JWT_SECRET:
-        # Misconfiguration, not an anonymous caller - fail closed rather than
-        # silently trusting the token, but surface it distinctly in logs.
-        logger.error("SUPABASE_JWT_SECRET is not set - admin auth cannot verify tokens")
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = None
 
-    try:
-        payload = jwt.decode(
-            token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-    except jwt.PyJWTError:
+    if _jwks_client:
+        try:
+            signing_key = _jwks_client.get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["ES256", "RS256"],
+                audience="authenticated",
+                issuer=SUPABASE_ISSUER,
+            )
+        except jwt.PyJWTError:
+            payload = None
+
+    if payload is None and SUPABASE_JWT_SECRET:
+        try:
+            payload = jwt.decode(
+                token,
+                SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+        except jwt.PyJWTError:
+            payload = None
+
+    if payload is None:
+        if not _jwks_client and not SUPABASE_JWT_SECRET:
+            # Misconfiguration, not an anonymous caller - fail closed rather
+            # than silently trusting the token, but surface it distinctly
+            # in logs. Set SUPABASE_URL (preferred) or SUPABASE_JWT_SECRET.
+            logger.error("Neither SUPABASE_URL nor SUPABASE_JWT_SECRET is set - admin auth cannot verify tokens")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     sub = payload.get("sub")

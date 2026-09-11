@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, date
 
 # Must be set BEFORE main_api is imported - both are read at module load time.
 os.environ["SUPABASE_JWT_SECRET"] = "test-secret-for-pytest-do-not-use-in-prod"
+os.environ.pop("SUPABASE_URL", None)  # keep the JWKS client unconfigured by default; individual tests monkeypatch it in
 os.environ.setdefault("DATABASE_URL", "sqlite:///./tests/_test_admin.db")
 os.environ["ADMIN_FREE_SESSIONS_COUNT"] = "4"
 
@@ -29,8 +30,10 @@ if os.path.exists(_db_path):
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
+import main_api
 from main_api import app, SessionLocal, _rank_map, _recompute_client_free_sessions
 from sql_alchemy import Tenant, UserProfile, Klijent, Sesija, SesijaKlijent
 
@@ -170,6 +173,67 @@ def test_admin_owner_can_access(seeded):
 
 def test_unknown_account_is_rejected(seeded):
     resp = client.get("/admin/dashboard", headers=auth_headers("nobody-sub"))
+    assert resp.status_code == 401
+
+
+def test_es256_jwks_token_is_verified(seeded, monkeypatch):
+    """Modern Supabase projects sign session tokens with an asymmetric
+    ES256 key published via JWKS, not the legacy HS256 shared secret.
+    This proves that path actually works end-to-end (signature,
+    audience, issuer), not just that the HS256 fallback used elsewhere
+    in this file happens to succeed."""
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    issuer = "https://example.supabase.co/auth/v1"
+
+    class FakeSigningKey:
+        key = private_key.public_key()
+
+    class FakeJWKSClient:
+        def get_signing_key_from_jwt(self, token):
+            return FakeSigningKey()
+
+    monkeypatch.setattr(main_api, "_jwks_client", FakeJWKSClient())
+    monkeypatch.setattr(main_api, "SUPABASE_ISSUER", issuer)
+
+    token = jwt.encode(
+        {
+            "sub": "owner-sub",
+            "aud": "authenticated",
+            "iss": issuer,
+            "exp": datetime.utcnow() + timedelta(hours=1),
+        },
+        private_key,
+        algorithm="ES256",
+    )
+
+    resp = client.get("/admin/dashboard", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+
+
+def test_es256_token_with_wrong_signature_is_rejected(seeded, monkeypatch):
+    signing_key_pair = ec.generate_private_key(ec.SECP256R1())
+    attacker_key_pair = ec.generate_private_key(ec.SECP256R1())
+    issuer = "https://example.supabase.co/auth/v1"
+
+    class FakeSigningKey:
+        key = signing_key_pair.public_key()  # server only trusts this key
+
+    class FakeJWKSClient:
+        def get_signing_key_from_jwt(self, token):
+            return FakeSigningKey()
+
+    monkeypatch.setattr(main_api, "_jwks_client", FakeJWKSClient())
+    monkeypatch.setattr(main_api, "SUPABASE_ISSUER", issuer)
+
+    # Signed with a different key than the one the "JWKS" serves.
+    forged_token = jwt.encode(
+        {"sub": "owner-sub", "aud": "authenticated", "iss": issuer,
+         "exp": datetime.utcnow() + timedelta(hours=1)},
+        attacker_key_pair,
+        algorithm="ES256",
+    )
+
+    resp = client.get("/admin/dashboard", headers={"Authorization": f"Bearer {forged_token}"})
     assert resp.status_code == 401
 
 
