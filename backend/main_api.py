@@ -138,6 +138,25 @@ def run_light_migrations(engine):
             except (OperationalError, ProgrammingError):
                 conn.rollback()
 
+        # Guaranteed-admin bootstrap: if set, this email is always forced
+        # to is_admin = TRUE on every startup, regardless of what's in the
+        # database - a "break glass" way to guarantee a specific person
+        # has admin access without ever needing direct database access.
+        # Runs unconditionally (not just when NULL), so as long as this
+        # env var is set, nothing (a UI demote, a bad migration, a stale
+        # backup) can lock that email out of the admin area. Unset it once
+        # you no longer want that guarantee.
+        bootstrap_admin_email = os.getenv("BOOTSTRAP_ADMIN_EMAIL")
+        if bootstrap_admin_email:
+            try:
+                conn.execute(
+                    text("UPDATE user_profile SET is_admin = TRUE WHERE LOWER(email) = LOWER(:email)"),
+                    {"email": bootstrap_admin_email},
+                )
+                conn.commit()
+            except (OperationalError, ProgrammingError):
+                conn.rollback()
+
 
 def init_db():
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/Class_Diagram.db")
