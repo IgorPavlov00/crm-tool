@@ -2,7 +2,7 @@ import os
 from typing import List, Optional
 from sqlalchemy import (
     create_engine, ForeignKey, String, Date, DateTime,
-    Float, Integer, Boolean, Text
+    Float, Integer, Boolean, Text, UniqueConstraint
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column, relationship
@@ -62,6 +62,11 @@ class UserProfile(Base):
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenant.id"), nullable=False)
     created_at: Mapped[Optional[dt_datetime]] = mapped_column(DateTime, default=dt_datetime.utcnow)
 
+    # Admin-managed "is this therapist currently active" flag - independent of
+    # role (owner/member). Deactivated therapists are hidden from active
+    # rosters/assignment pickers but their historical clients/sessions stay intact.
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
     tenant = relationship("Tenant", back_populates="user_profiles")
 
 
@@ -98,9 +103,19 @@ class Klijent(Base):
     broj_telefona: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
+    # Admin client-registry fields (Mental Health Center admin area)
+    gender: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # female | male | other | unknown
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)  # active | completed | archived
+    therapist_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_profile.id"), nullable=True, index=True)
+    date_started: Mapped[Optional[dt_date]] = mapped_column(Date, nullable=True)
+    date_completed: Mapped[Optional[dt_date]] = mapped_column(Date, nullable=True)
+    created_at: Mapped[Optional[dt_datetime]] = mapped_column(DateTime, default=dt_datetime.utcnow)
+    updated_at: Mapped[Optional[dt_datetime]] = mapped_column(DateTime, default=dt_datetime.utcnow, onupdate=dt_datetime.utcnow)
+
     sesijaklijent = relationship("SesijaKlijent", back_populates="klijent")
     cena_1 = relationship("Cena", back_populates="klijent_1")
     grupa_clanstva = relationship("GrupaKlijent", back_populates="klijent")
+    therapist = relationship("UserProfile", foreign_keys=[therapist_id])
 
 
 class KlijentNapomena(Base):
@@ -138,16 +153,22 @@ class Sesija(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenant.id"), nullable=False)
 
-    pocetak: Mapped[dt_datetime] = mapped_column(DateTime)
+    pocetak: Mapped[dt_datetime] = mapped_column(DateTime, index=True)
     kraj: Mapped[dt_datetime] = mapped_column(DateTime)
 
     cena: Mapped[float] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(100))
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Which therapist ran the session, and whether it counts toward the
+    # first-N-sessions-free policy (see FREE_SESSIONS_COUNT in main_api.py).
+    therapist_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_profile.id"), nullable=True, index=True)
+    is_free: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
     uplate = relationship("Cena", back_populates="sesija_2")
     sesijaklijent_1 = relationship("SesijaKlijent", back_populates="sesija")
     sesijagrupa_1 = relationship("SesijaGrupa", back_populates="sesija_1")
+    therapist = relationship("UserProfile", foreign_keys=[therapist_id])
 
 
 ############################################
@@ -213,3 +234,60 @@ class GrupaKlijent(Base):
 
     grupa = relationship("Grupa", back_populates="grupa_clanovi")
     klijent = relationship("Klijent", back_populates="grupa_clanstva")
+
+
+############################################
+# Admin: Team Attendance
+############################################
+
+class TeamMeeting(Base):
+    __tablename__ = "team_meeting"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenant.id"), nullable=False, index=True)
+
+    date: Mapped[dt_date] = mapped_column(Date, index=True)
+    type: Mapped[str] = mapped_column(String(100), default="team_meeting")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_profile.id"), nullable=True)
+    created_at: Mapped[dt_datetime] = mapped_column(DateTime, default=dt_datetime.utcnow)
+
+    attendance_records = relationship("AttendanceRecord", back_populates="meeting", cascade="all, delete-orphan")
+
+
+class AttendanceRecord(Base):
+    __tablename__ = "attendance_record"
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "user_profile_id", name="uq_attendance_meeting_member"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenant.id"), nullable=False, index=True)
+
+    meeting_id: Mapped[int] = mapped_column(ForeignKey("team_meeting.id"), index=True)
+    user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20))  # present | absent | excused
+
+    created_at: Mapped[dt_datetime] = mapped_column(DateTime, default=dt_datetime.utcnow)
+    updated_at: Mapped[dt_datetime] = mapped_column(DateTime, default=dt_datetime.utcnow, onupdate=dt_datetime.utcnow)
+
+    meeting = relationship("TeamMeeting", back_populates="attendance_records")
+    user_profile = relationship("UserProfile", foreign_keys=[user_profile_id])
+
+
+############################################
+# Admin: Audit Log
+############################################
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenant.id"), nullable=False, index=True)
+
+    actor_user_profile_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_profile.id"), nullable=True)
+    actor_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    action: Mapped[str] = mapped_column(String(50))  # e.g. CLIENT_CREATED, SESSION_DELETED
+    entity_type: Mapped[str] = mapped_column(String(50))  # e.g. klijent, sesija, therapist, attendance
+    entity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[dt_datetime] = mapped_column(DateTime, default=dt_datetime.utcnow, index=True)

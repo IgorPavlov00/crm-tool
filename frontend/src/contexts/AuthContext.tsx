@@ -111,6 +111,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  // The admin area verifies this bearer token server-side (see require_admin
+  // in main_api.py) instead of trusting a client-supplied header, so it must
+  // be kept in sync with the current Supabase session on every change,
+  // including silent token refreshes.
+  const applyAuthTokenToAxios = (accessToken?: string | null) => {
+    if (accessToken) {
+      axios.defaults.headers.common["Authorization"] = `Bearer ${accessToken}`;
+    } else {
+      delete axios.defaults.headers.common["Authorization"];
+    }
+  };
+
   const fetchProfile = useCallback(
     async (user: User): Promise<UserProfile | null> => {
       const inviteToken = sessionStorage.getItem(INVITE_STORAGE_KEY);
@@ -188,6 +200,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
       setSession(s);
       setUser(s?.user ?? null);
+      applyAuthTokenToAxios(s?.access_token);
 
       if (s?.user) {
         const p = await fetchProfile(s.user);
@@ -359,6 +372,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     setSession(null);
     setProfile(null);
     applyTenantToAxios(null);
+    applyAuthTokenToAxios(null);
   };
 
   return (

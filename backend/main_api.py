@@ -3,16 +3,19 @@ import os, json
 import time as time_module
 import hmac, hashlib, base64
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, time as dt_time, date
+from collections import Counter
 from fastapi import Depends, FastAPI, HTTPException, Request, status, Body, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, or_
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, ProgrammingError
 from pydantic_classes import *
 from sql_alchemy import *
 import io
+import csv
+import jwt
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -73,6 +76,21 @@ def run_light_migrations(engine):
         "ALTER TABLE tenant ADD COLUMN subscription_paid_until TIMESTAMP",
         "ALTER TABLE tenant ADD COLUMN photo_url TEXT",
         "ALTER TABLE client_account ADD COLUMN photo_url TEXT",
+        # Admin area (Mental Health Center management)
+        "ALTER TABLE user_profile ADD COLUMN active BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE klijent ADD COLUMN gender VARCHAR(20)",
+        "ALTER TABLE klijent ADD COLUMN status VARCHAR(20)",
+        "ALTER TABLE klijent ADD COLUMN therapist_id INTEGER",
+        "ALTER TABLE klijent ADD COLUMN date_started DATE",
+        "ALTER TABLE klijent ADD COLUMN date_completed DATE",
+        "ALTER TABLE klijent ADD COLUMN created_at TIMESTAMP",
+        "ALTER TABLE klijent ADD COLUMN updated_at TIMESTAMP",
+        "ALTER TABLE sesija ADD COLUMN therapist_id INTEGER",
+        "ALTER TABLE sesija ADD COLUMN is_free BOOLEAN",
+        "CREATE INDEX IF NOT EXISTS ix_klijent_status ON klijent (status)",
+        "CREATE INDEX IF NOT EXISTS ix_klijent_therapist_id ON klijent (therapist_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sesija_therapist_id ON sesija (therapist_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sesija_pocetak ON sesija (pocetak)",
     ]
     with engine.connect() as conn:
         for stmt in statements:
@@ -95,6 +113,21 @@ def run_light_migrations(engine):
             conn.commit()
         except (OperationalError, ProgrammingError):
             conn.rollback()
+
+        # Backfill defaults for rows that existed before the admin area was
+        # added, so old data behaves consistently with newly-created rows.
+        backfill_statements = [
+            "UPDATE user_profile SET active = TRUE WHERE active IS NULL",
+            "UPDATE klijent SET status = 'active' WHERE status IS NULL",
+            "UPDATE klijent SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL",
+            "UPDATE klijent SET updated_at = created_at WHERE updated_at IS NULL",
+        ]
+        for stmt in backfill_statements:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except (OperationalError, ProgrammingError):
+                conn.rollback()
 
 
 def init_db():
@@ -532,6 +565,88 @@ def require_active_subscription(
             detail="Vaš probni period ili pretplata je istekla. Obnovite pretplatu da nastavite.",
         )
     return tenant_id
+
+
+############################################
+#
+#   Admin authorization
+#
+#   Every other endpoint in this file trusts the client-supplied
+#   X-Tenant-ID header (see get_tenant_id above) - a pre-existing trust
+#   model this change does not touch. The admin area below is more
+#   sensitive (center-wide statistics, every therapist's clients), so it
+#   is held to a stricter standard: the caller's Supabase session token is
+#   verified server-side (signature + expiry), the tenant/role are read
+#   from the verified profile in the database - never from a header - and
+#   a non-owner or unauthenticated caller is rejected before any query runs.
+#
+############################################
+
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+
+
+def get_verified_supabase_user_id(request: Request) -> str:
+    """Verifies the bearer token's signature and expiry against Supabase's
+    project JWT secret and returns the verified `sub` claim (the Supabase
+    auth user id). Never trusts an unverified/self-reported id."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = auth_header[len("Bearer "):].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    if not SUPABASE_JWT_SECRET:
+        # Misconfiguration, not an anonymous caller - fail closed rather than
+        # silently trusting the token, but surface it distinctly in logs.
+        logger.error("SUPABASE_JWT_SECRET is not set - admin auth cannot verify tokens")
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        payload = jwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return sub
+
+
+def require_admin(
+        request: Request,
+        database: Session = Depends(get_db),
+) -> "UserProfile":
+    """Admin-only dependency for the /admin/* routes. Resolves the caller
+    from a verified bearer token (never a client-supplied header/body id),
+    and requires role == 'owner' within their own tenant. Returns the
+    UserProfile row so endpoints read tenant_id/user id from it directly."""
+    supabase_user_id = get_verified_supabase_user_id(request)
+
+    profile = database.query(UserProfile).filter(
+        UserProfile.supabase_user_id == supabase_user_id
+    ).first()
+    if not profile:
+        raise HTTPException(status_code=401, detail="No profile for this account")
+
+    if profile.role != "owner":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    tenant = database.query(Tenant).filter(Tenant.id == profile.tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if not has_active_subscription(tenant):
+        raise HTTPException(
+            status_code=402,
+            detail="Vaš probni period ili pretplata je istekla. Obnovite pretplatu da nastavite.",
+        )
+
+    return profile
 
 
 @app.get("/tenant/subscription", tags=["Tenant"])
@@ -3558,6 +3673,1084 @@ def cancel_client_appointment(
         logger.error(f"Failed to send cancellation notice to therapist: {e}")
 
     return {"sesija_id": sesija.id, "status": sesija.status}
+
+
+############################################
+#
+#   Admin Area (Mental Health Center management)
+#
+#   Everything below is gated by require_admin (see above) - a verified
+#   Supabase bearer token whose owner is role == "owner" in the tenant
+#   derived from THAT verified profile, never from a client-supplied
+#   header. "Therapist" == a UserProfile row in the admin's own tenant;
+#   "Client"/"Session" reuse the existing Klijent/Sesija tables with the
+#   new therapist_id/status/gender columns added above.
+#
+############################################
+
+CLIENT_GENDERS = {"female", "male", "other", "unknown"}
+CLIENT_STATUSES = {"active", "completed", "archived"}
+ATTENDANCE_STATUSES = {"present", "absent", "excused"}
+SESSION_STATUSES = {"zakazano", "otkazano"}
+
+# How many of a client's earliest sessions are free, per the center's
+# paperwork ("prvih 5ečetiri seanse su besplatne"). Configurable rather than
+# hardcoded, per the business-rule note in the admin spec.
+FREE_SESSIONS_COUNT = int(os.getenv("ADMIN_FREE_SESSIONS_COUNT", "4"))
+
+
+class AdminTherapistUpdate(BaseModel):
+    full_name: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class AdminClientCreate(BaseModel):
+    ime: str
+    prezime: str
+    email: Optional[str] = None
+    broj_telefona: Optional[str] = None
+    gender: Optional[str] = None
+    therapist_id: Optional[int] = None
+    status: Optional[str] = "active"
+    date_started: Optional[date] = None
+
+
+class AdminClientUpdate(BaseModel):
+    ime: str
+    prezime: str
+    email: Optional[str] = None
+    broj_telefona: Optional[str] = None
+    gender: Optional[str] = None
+    therapist_id: Optional[int] = None
+    status: str
+    date_started: Optional[date] = None
+    date_completed: Optional[date] = None
+
+
+class AdminSessionCreate(BaseModel):
+    klijent_id: int
+    therapist_id: Optional[int] = None
+    pocetak: datetime
+    kraj: Optional[datetime] = None
+    status: Optional[str] = "zakazano"
+    is_free: Optional[bool] = None
+    cena: Optional[float] = 0.0
+
+
+class AdminSessionUpdate(BaseModel):
+    therapist_id: Optional[int] = None  # 0 clears the assignment
+    pocetak: Optional[datetime] = None
+    kraj: Optional[datetime] = None
+    status: Optional[str] = None
+    is_free: Optional[bool] = None
+    cena: Optional[float] = None
+
+
+class AdminMeetingCreate(BaseModel):
+    date: date
+    type: Optional[str] = "team_meeting"
+    notes: Optional[str] = None
+
+
+class AdminAttendanceEntry(BaseModel):
+    user_profile_id: int
+    status: str
+
+
+class AdminAttendanceUpdate(BaseModel):
+    records: List[AdminAttendanceEntry]
+
+
+def _date_bounds(start_date: Optional[date], end_date: Optional[date]):
+    start_dt = datetime.combine(start_date, dt_time.min) if start_date else None
+    end_dt = datetime.combine(end_date, dt_time.max) if end_date else None
+    return start_dt, end_dt
+
+
+def _effective_client_date(k: "Klijent") -> Optional[date]:
+    if k.date_started:
+        return k.date_started
+    if k.created_at:
+        return k.created_at.date()
+    return None
+
+
+def _in_range(d: Optional[date], start_date: Optional[date], end_date: Optional[date]) -> bool:
+    if d is None:
+        return start_date is None and end_date is None
+    if start_date and d < start_date:
+        return False
+    if end_date and d > end_date:
+        return False
+    return True
+
+
+def _rank_map(pairs) -> dict:
+    """Standard competition ranking (1,2,2,4) over a list of (id, count)."""
+    ordered = sorted(pairs, key=lambda p: p[1], reverse=True)
+    ranks, prev_count, rank = {}, None, 0
+    for i, (item_id, count) in enumerate(ordered):
+        if count != prev_count:
+            rank = i + 1
+        ranks[item_id] = rank
+        prev_count = count
+    return ranks
+
+
+def _rank_list(pairs, names: dict) -> list:
+    ordered = sorted(pairs, key=lambda p: p[1], reverse=True)
+    result, prev_count, rank = [], None, 0
+    for i, (uid, count) in enumerate(ordered):
+        if count != prev_count:
+            rank = i + 1
+        result.append({"rank": rank, "user_id": uid, "name": names.get(uid, "—"), "count": count})
+        prev_count = count
+    return result
+
+
+def _therapist_name(p: Optional["UserProfile"]) -> Optional[str]:
+    if not p:
+        return None
+    return p.full_name or p.email
+
+
+def _log_admin_action(db: Session, admin: "UserProfile", action: str, entity_type: str, entity_id: Optional[int] = None):
+    db.add(AdminAuditLog(
+        tenant_id=admin.tenant_id,
+        actor_user_profile_id=admin.id,
+        actor_email=admin.email,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+    ))
+
+
+def _recompute_client_free_sessions(db: Session, tenant_id: int, klijent_id: int):
+    """Recomputes which of a client's sessions fall in the free-sessions
+    window, in chronological order, whenever a session tied to them is
+    created/rescheduled/cancelled/deleted. Sessions with an explicit
+    admin override (set on the individual session) are left untouched."""
+    sesija_ids = [
+        row.sesija_id for row in db.query(SesijaKlijent).filter(
+            SesijaKlijent.klijent_id == klijent_id, SesijaKlijent.tenant_id == tenant_id
+        ).all()
+    ]
+    if not sesija_ids:
+        return
+    sessions = db.query(Sesija).filter(
+        Sesija.id.in_(sesija_ids), Sesija.tenant_id == tenant_id, Sesija.status != "otkazano"
+    ).order_by(Sesija.pocetak.asc()).all()
+    for idx, s in enumerate(sessions):
+        s.is_free = idx < FREE_SESSIONS_COUNT
+
+
+def _fetch_admin_base_data(db: Session, tenant_id: int):
+    clients = db.query(Klijent).filter(Klijent.tenant_id == tenant_id).all()
+    sessions = db.query(Sesija).filter(Sesija.tenant_id == tenant_id).all()
+    return clients, sessions
+
+
+def _klijent_payload(k: "Klijent") -> dict:
+    return {
+        "id": k.id,
+        "ime": k.ime,
+        "prezime": k.prezime,
+        "email": k.email,
+        "broj_telefona": k.broj_telefona,
+        "gender": k.gender,
+        "status": k.status,
+        "therapist_id": k.therapist_id,
+        "therapist_name": _therapist_name(k.therapist),
+        "date_started": k.date_started.isoformat() if k.date_started else None,
+        "date_completed": k.date_completed.isoformat() if k.date_completed else None,
+        "created_at": k.created_at.isoformat() if k.created_at else None,
+        "updated_at": k.updated_at.isoformat() if k.updated_at else None,
+    }
+
+
+def _sesija_admin_payload(s: "Sesija", session_number: Optional[int] = None) -> dict:
+    link = s.sesijaklijent_1[0] if s.sesijaklijent_1 else None
+    klijent = link.klijent if link else None
+    return {
+        "id": s.id,
+        "klijent_id": klijent.id if klijent else None,
+        "klijent_name": f"{klijent.ime} {klijent.prezime}" if klijent else None,
+        "therapist_id": s.therapist_id,
+        "therapist_name": _therapist_name(s.therapist),
+        "pocetak": s.pocetak.isoformat(),
+        "kraj": s.kraj.isoformat() if s.kraj else None,
+        "status": s.status,
+        "cena": s.cena,
+        "is_free": s.is_free,
+        "session_number": session_number,
+    }
+
+
+def _therapist_stats_from(therapist: "UserProfile", clients_all, sessions_all, start_date, end_date) -> dict:
+    my_clients = [c for c in clients_all if c.therapist_id == therapist.id]
+    my_sessions = [s for s in sessions_all if s.therapist_id == therapist.id]
+    clients_in_range = [c for c in my_clients if _in_range(_effective_client_date(c), start_date, end_date)]
+    sessions_in_range = [s for s in my_sessions if _in_range(s.pocetak.date(), start_date, end_date)]
+    return {
+        "user_id": therapist.id,
+        "full_name": therapist.full_name,
+        "email": therapist.email,
+        "role": therapist.role,
+        "active": therapist.active,
+        "total_clients": len(my_clients),
+        "active_clients": len([c for c in my_clients if c.status == "active"]),
+        "completed_clients": len([c for c in my_clients if c.status == "completed"]),
+        "clients_in_range": len(clients_in_range),
+        "total_sessions": len(my_sessions),
+        "sessions_in_range": len(sessions_in_range),
+        "free_sessions_in_range": len([s for s in sessions_in_range if s.is_free]),
+    }
+
+
+def _build_admin_overview(database: Session, tenant_id: int, start_date: Optional[date], end_date: Optional[date]) -> dict:
+    therapists = database.query(UserProfile).filter(UserProfile.tenant_id == tenant_id).all()
+    clients_all, sessions_all = _fetch_admin_base_data(database, tenant_id)
+
+    clients = [c for c in clients_all if _in_range(_effective_client_date(c), start_date, end_date)]
+    sessions = [s for s in sessions_all if _in_range(s.pocetak.date(), start_date, end_date)]
+
+    gender_counts = Counter((c.gender or "unknown") for c in clients)
+    status_counts = Counter(c.status for c in clients)
+    names = {t.id: _therapist_name(t) for t in therapists}
+
+    clients_by_therapist = Counter(c.therapist_id for c in clients if c.therapist_id)
+    sessions_by_therapist = Counter(s.therapist_id for s in sessions if s.therapist_id)
+
+    client_leaderboard = _rank_list(list(clients_by_therapist.items()), names)
+    session_leaderboard = _rank_list(list(sessions_by_therapist.items()), names)
+
+    monthly_sessions = Counter(s.pocetak.strftime("%Y-%m") for s in sessions)
+    monthly_new_clients = Counter()
+    for c in clients:
+        d = _effective_client_date(c)
+        if d:
+            monthly_new_clients[d.strftime("%Y-%m")] += 1
+
+    return {
+        "period": {
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+        },
+        "cards": {
+            "total_therapists": len(therapists),
+            "active_therapists": len([t for t in therapists if t.active]),
+            "total_clients": len(clients),
+            "active_clients": status_counts.get("active", 0),
+            "completed_clients": status_counts.get("completed", 0),
+            "archived_clients": status_counts.get("archived", 0),
+            "total_sessions": len(sessions),
+            "free_sessions": len([s for s in sessions if s.is_free]),
+            "paid_sessions": len([s for s in sessions if s.is_free is False]),
+            "female_clients": gender_counts.get("female", 0),
+            "male_clients": gender_counts.get("male", 0),
+            "other_clients": gender_counts.get("other", 0) + gender_counts.get("unknown", 0),
+        },
+        "gender_breakdown": [{"gender": g, "count": c} for g, c in gender_counts.items()],
+        "monthly_sessions": [{"month": m, "count": c} for m, c in sorted(monthly_sessions.items())],
+        "monthly_new_clients": [{"month": m, "count": c} for m, c in sorted(monthly_new_clients.items())],
+        "clients_per_therapist": [{"user_id": uid, "name": names.get(uid, "—"), "count": c} for uid, c in clients_by_therapist.most_common()],
+        "sessions_per_therapist": [{"user_id": uid, "name": names.get(uid, "—"), "count": c} for uid, c in sessions_by_therapist.most_common()],
+        "top_clients_leaderboard": client_leaderboard[:5],
+        "top_sessions_leaderboard": session_leaderboard[:5],
+        "full_clients_leaderboard": client_leaderboard,
+        "full_sessions_leaderboard": session_leaderboard,
+    }
+
+
+############################################
+# Admin - Dashboard & Leaderboards
+############################################
+
+@app.get("/admin/dashboard", tags=["Admin"])
+def admin_dashboard(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    return _build_admin_overview(database, admin.tenant_id, start_date, end_date)
+
+
+@app.get("/admin/leaderboard", tags=["Admin"])
+def admin_leaderboard(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    overview = _build_admin_overview(database, admin.tenant_id, start_date, end_date)
+    return {
+        "period": overview["period"],
+        "most_clients": overview["full_clients_leaderboard"],
+        "most_sessions": overview["full_sessions_leaderboard"],
+    }
+
+
+############################################
+# Admin - Therapist Management
+############################################
+
+@app.get("/admin/therapists", tags=["Admin"])
+def admin_list_therapists(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    therapists = database.query(UserProfile).filter(UserProfile.tenant_id == admin.tenant_id).order_by(UserProfile.created_at).all()
+    clients_all, sessions_all = _fetch_admin_base_data(database, admin.tenant_id)
+    rows = [_therapist_stats_from(t, clients_all, sessions_all, start_date, end_date) for t in therapists]
+
+    client_ranks = _rank_map([(r["user_id"], r["clients_in_range"]) for r in rows])
+    session_ranks = _rank_map([(r["user_id"], r["sessions_in_range"]) for r in rows])
+    overall_client_ranks = _rank_map([(r["user_id"], r["total_clients"]) for r in rows])
+    overall_session_ranks = _rank_map([(r["user_id"], r["total_sessions"]) for r in rows])
+    for r in rows:
+        r["clients_rank_in_range"] = client_ranks[r["user_id"]]
+        r["sessions_rank_in_range"] = session_ranks[r["user_id"]]
+        r["clients_rank_overall"] = overall_client_ranks[r["user_id"]]
+        r["sessions_rank_overall"] = overall_session_ranks[r["user_id"]]
+    return rows
+
+
+@app.get("/admin/therapists/invite-link", tags=["Admin"])
+def admin_therapist_invite_link(
+        admin: UserProfile = Depends(require_admin),
+):
+    """'Add therapist' reuses the existing team-invite mechanism (Supabase
+    handles signup/login) rather than an admin-set-password flow."""
+    return {
+        "invite_token": create_invite_token(admin.tenant_id),
+        "tenant_id": admin.tenant_id,
+        "expires_in_seconds": INVITE_TOKEN_TTL_SECONDS,
+    }
+
+
+@app.get("/admin/therapists/{user_id}", tags=["Admin"])
+def admin_get_therapist(
+        user_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    therapist = database.query(UserProfile).filter(UserProfile.id == user_id, UserProfile.tenant_id == admin.tenant_id).first()
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+
+    all_therapists = database.query(UserProfile).filter(UserProfile.tenant_id == admin.tenant_id).all()
+    clients_all, sessions_all = _fetch_admin_base_data(database, admin.tenant_id)
+    all_rows = [_therapist_stats_from(t, clients_all, sessions_all, start_date, end_date) for t in all_therapists]
+
+    client_ranks = _rank_map([(r["user_id"], r["clients_in_range"]) for r in all_rows])
+    session_ranks = _rank_map([(r["user_id"], r["sessions_in_range"]) for r in all_rows])
+    overall_client_ranks = _rank_map([(r["user_id"], r["total_clients"]) for r in all_rows])
+    overall_session_ranks = _rank_map([(r["user_id"], r["total_sessions"]) for r in all_rows])
+
+    stats = next(r for r in all_rows if r["user_id"] == user_id)
+    stats["clients_rank_in_range"] = client_ranks[user_id]
+    stats["sessions_rank_in_range"] = session_ranks[user_id]
+    stats["clients_rank_overall"] = overall_client_ranks[user_id]
+    stats["sessions_rank_overall"] = overall_session_ranks[user_id]
+
+    clients = database.query(Klijent).filter(Klijent.tenant_id == admin.tenant_id, Klijent.therapist_id == user_id).order_by(Klijent.created_at.desc()).all()
+    sessions = database.query(Sesija).filter(Sesija.tenant_id == admin.tenant_id, Sesija.therapist_id == user_id).order_by(Sesija.pocetak.desc()).limit(200).all()
+
+    records = database.query(AttendanceRecord).filter(AttendanceRecord.tenant_id == admin.tenant_id, AttendanceRecord.user_profile_id == user_id).all()
+    held = len(records)
+    present = len([r for r in records if r.status == "present"])
+    absent = len([r for r in records if r.status == "absent"])
+    excused = len([r for r in records if r.status == "excused"])
+
+    return {
+        **stats,
+        "clients": [_klijent_payload(c) for c in clients],
+        "recent_sessions": [_sesija_admin_payload(s) for s in sessions],
+        "attendance": {
+            "meetings_held": held,
+            "attended": present,
+            "absent": absent,
+            "excused": excused,
+            "percentage": round(present / held * 100, 1) if held else None,
+        },
+    }
+
+
+@app.patch("/admin/therapists/{user_id}", tags=["Admin"])
+def admin_update_therapist(
+        user_id: int,
+        data: AdminTherapistUpdate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    therapist = database.query(UserProfile).filter(UserProfile.id == user_id, UserProfile.tenant_id == admin.tenant_id).first()
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+
+    if data.full_name is not None and data.full_name.strip():
+        therapist.full_name = data.full_name.strip()
+    if data.active is not None:
+        if therapist.id == admin.id and not data.active:
+            raise HTTPException(status_code=400, detail="Ne možete deaktivirati sopstveni nalog")
+        therapist.active = data.active
+
+    _log_admin_action(database, admin, "THERAPIST_UPDATED", "therapist", therapist.id)
+    database.commit()
+    database.refresh(therapist)
+    return {
+        "user_id": therapist.id,
+        "full_name": therapist.full_name,
+        "email": therapist.email,
+        "role": therapist.role,
+        "active": therapist.active,
+    }
+
+
+############################################
+# Admin - Client Registry
+############################################
+
+@app.get("/admin/clients", tags=["Admin"])
+def admin_list_clients(
+        search: Optional[str] = None,
+        therapist_id: Optional[int] = None,
+        status: Optional[str] = None,
+        gender: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        sort: Optional[str] = None,  # name | sessions | recent (default)
+        page: int = 1,
+        page_size: int = 25,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    page = max(1, page)
+    page_size = max(1, min(page_size, 200))
+
+    query = database.query(Klijent).filter(Klijent.tenant_id == admin.tenant_id)
+    if therapist_id is not None:
+        query = query.filter(Klijent.therapist_id == therapist_id)
+    if status:
+        query = query.filter(Klijent.status == status)
+    if gender:
+        query = query.filter(Klijent.gender == gender)
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        query = query.filter(or_(Klijent.ime.ilike(like), Klijent.prezime.ilike(like)))
+
+    clients = query.all()
+    if start_date or end_date:
+        clients = [c for c in clients if _in_range(_effective_client_date(c), start_date, end_date)]
+
+    sk_rows = database.query(SesijaKlijent.klijent_id).filter(SesijaKlijent.tenant_id == admin.tenant_id).all()
+    counts = Counter(r.klijent_id for r in sk_rows)
+
+    if sort == "name":
+        clients.sort(key=lambda c: ((c.ime or "").lower(), (c.prezime or "").lower()))
+    elif sort == "sessions":
+        clients.sort(key=lambda c: counts.get(c.id, 0), reverse=True)
+    else:
+        clients.sort(key=lambda c: c.created_at or datetime.min, reverse=True)
+
+    total = len(clients)
+    start_idx = (page - 1) * page_size
+    page_items = clients[start_idx:start_idx + page_size]
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "data": [{**_klijent_payload(c), "session_count": counts.get(c.id, 0)} for c in page_items],
+    }
+
+
+@app.post("/admin/clients", tags=["Admin"])
+def admin_create_client(
+        data: AdminClientCreate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    if not data.ime.strip() or not data.prezime.strip():
+        raise HTTPException(status_code=400, detail="Ime i prezime su obavezni")
+    if data.gender and data.gender not in CLIENT_GENDERS:
+        raise HTTPException(status_code=400, detail="Nepoznat pol")
+    status_value = data.status if data.status in CLIENT_STATUSES else "active"
+
+    therapist = None
+    if data.therapist_id is not None:
+        therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id, UserProfile.tenant_id == admin.tenant_id).first()
+        if not therapist:
+            raise HTTPException(status_code=400, detail="Terapeut nije pronađen")
+
+    client = Klijent(
+        tenant_id=admin.tenant_id,
+        ime=data.ime.strip(),
+        prezime=data.prezime.strip(),
+        email=data.email,
+        broj_telefona=data.broj_telefona,
+        gender=data.gender,
+        status=status_value,
+        therapist_id=therapist.id if therapist else None,
+        date_started=data.date_started or date.today(),
+    )
+    database.add(client)
+    database.flush()
+    _log_admin_action(database, admin, "CLIENT_CREATED", "klijent", client.id)
+    database.commit()
+    database.refresh(client)
+    return _klijent_payload(client)
+
+
+@app.get("/admin/clients/{client_id}", tags=["Admin"])
+def admin_get_client(
+        client_id: int,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    client = database.query(Klijent).filter(Klijent.id == client_id, Klijent.tenant_id == admin.tenant_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Klijent not found")
+
+    sesija_ids = [
+        row.sesija_id for row in database.query(SesijaKlijent).filter(
+            SesijaKlijent.klijent_id == client_id, SesijaKlijent.tenant_id == admin.tenant_id
+        ).all()
+    ]
+    sessions = (
+        database.query(Sesija).filter(Sesija.id.in_(sesija_ids), Sesija.tenant_id == admin.tenant_id)
+        .order_by(Sesija.pocetak.asc()).all()
+        if sesija_ids else []
+    )
+
+    timeline = []
+    counted = 0
+    for s in sessions:
+        number = None
+        if s.status != "otkazano":
+            counted += 1
+            number = counted
+        timeline.append(_sesija_admin_payload(s, number))
+
+    return {
+        **_klijent_payload(client),
+        "session_count": counted,
+        "sessions": list(reversed(timeline)),
+    }
+
+
+@app.put("/admin/clients/{client_id}", tags=["Admin"])
+def admin_update_client(
+        client_id: int,
+        data: AdminClientUpdate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    client = database.query(Klijent).filter(Klijent.id == client_id, Klijent.tenant_id == admin.tenant_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Klijent not found")
+    if not data.ime.strip() or not data.prezime.strip():
+        raise HTTPException(status_code=400, detail="Ime i prezime su obavezni")
+    if data.gender and data.gender not in CLIENT_GENDERS:
+        raise HTTPException(status_code=400, detail="Nepoznat pol")
+    if data.status not in CLIENT_STATUSES:
+        raise HTTPException(status_code=400, detail="Nepoznat status")
+
+    therapist = None
+    if data.therapist_id is not None:
+        therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id, UserProfile.tenant_id == admin.tenant_id).first()
+        if not therapist:
+            raise HTTPException(status_code=400, detail="Terapeut nije pronađen")
+
+    was_archived = client.status == "archived"
+    client.ime = data.ime.strip()
+    client.prezime = data.prezime.strip()
+    client.email = data.email
+    client.broj_telefona = data.broj_telefona
+    client.gender = data.gender
+    client.therapist_id = therapist.id if therapist else None
+    client.date_started = data.date_started
+    if data.status == "completed":
+        client.date_completed = data.date_completed or client.date_completed or date.today()
+    else:
+        client.date_completed = data.date_completed
+    client.status = data.status
+
+    action = "CLIENT_ARCHIVED" if (data.status == "archived" and not was_archived) else "CLIENT_UPDATED"
+    _log_admin_action(database, admin, action, "klijent", client.id)
+    database.commit()
+    database.refresh(client)
+    return _klijent_payload(client)
+
+
+############################################
+# Admin - Session Management
+############################################
+
+@app.get("/admin/sessions", tags=["Admin"])
+def admin_list_sessions(
+        therapist_id: Optional[int] = None,
+        klijent_id: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        is_free: Optional[bool] = None,
+        page: int = 1,
+        page_size: int = 25,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    page = max(1, page)
+    page_size = max(1, min(page_size, 200))
+
+    query = database.query(Sesija).filter(Sesija.tenant_id == admin.tenant_id)
+    if therapist_id is not None:
+        query = query.filter(Sesija.therapist_id == therapist_id)
+    if is_free is not None:
+        query = query.filter(Sesija.is_free == is_free)
+    start_dt, end_dt = _date_bounds(start_date, end_date)
+    if start_dt:
+        query = query.filter(Sesija.pocetak >= start_dt)
+    if end_dt:
+        query = query.filter(Sesija.pocetak <= end_dt)
+    if klijent_id is not None:
+        sesija_ids = [
+            r.sesija_id for r in database.query(SesijaKlijent).filter(
+                SesijaKlijent.klijent_id == klijent_id, SesijaKlijent.tenant_id == admin.tenant_id
+            ).all()
+        ]
+        query = query.filter(Sesija.id.in_(sesija_ids or [-1]))
+
+    query = query.order_by(Sesija.pocetak.desc())
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "data": [_sesija_admin_payload(s) for s in items],
+    }
+
+
+@app.post("/admin/sessions", tags=["Admin"])
+def admin_create_session(
+        data: AdminSessionCreate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    client = database.query(Klijent).filter(Klijent.id == data.klijent_id, Klijent.tenant_id == admin.tenant_id).first()
+    if not client:
+        raise HTTPException(status_code=400, detail="Klijent nije pronađen")
+
+    therapist_id = data.therapist_id if data.therapist_id is not None else client.therapist_id
+    if therapist_id is not None:
+        therapist = database.query(UserProfile).filter(UserProfile.id == therapist_id, UserProfile.tenant_id == admin.tenant_id).first()
+        if not therapist:
+            raise HTTPException(status_code=400, detail="Terapeut nije pronađen")
+
+    if data.status is not None and data.status not in SESSION_STATUSES:
+        raise HTTPException(status_code=400, detail="Nepoznat status")
+
+    session = Sesija(
+        tenant_id=admin.tenant_id,
+        pocetak=data.pocetak,
+        kraj=data.kraj or (data.pocetak + timedelta(hours=1)),
+        cena=data.cena or 0.0,
+        status=data.status or "zakazano",
+        therapist_id=therapist_id,
+        is_free=data.is_free,
+    )
+    database.add(session)
+    database.flush()
+
+    database.add(SesijaKlijent(tenant_id=admin.tenant_id, klijent_id=client.id, sesija_id=session.id))
+    database.flush()
+
+    if data.is_free is None:
+        _recompute_client_free_sessions(database, admin.tenant_id, client.id)
+
+    _log_admin_action(database, admin, "SESSION_CREATED", "sesija", session.id)
+    database.commit()
+    database.refresh(session)
+    return _sesija_admin_payload(session)
+
+
+@app.put("/admin/sessions/{session_id}", tags=["Admin"])
+def admin_update_session(
+        session_id: int,
+        data: AdminSessionUpdate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    session = database.query(Sesija).filter(Sesija.id == session_id, Sesija.tenant_id == admin.tenant_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesija not found")
+
+    link = database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == session_id, SesijaKlijent.tenant_id == admin.tenant_id).first()
+    affected_client_id = link.klijent_id if link else None
+
+    if data.therapist_id is not None:
+        if data.therapist_id == 0:
+            session.therapist_id = None
+        else:
+            therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id, UserProfile.tenant_id == admin.tenant_id).first()
+            if not therapist:
+                raise HTTPException(status_code=400, detail="Terapeut nije pronađen")
+            session.therapist_id = therapist.id
+    if data.pocetak is not None:
+        session.pocetak = data.pocetak
+    if data.kraj is not None:
+        session.kraj = data.kraj
+    if data.status is not None:
+        if data.status not in SESSION_STATUSES:
+            raise HTTPException(status_code=400, detail="Nepoznat status")
+        session.status = data.status
+    if data.cena is not None:
+        session.cena = data.cena
+
+    order_affecting_change = data.pocetak is not None or data.status is not None
+    if data.is_free is not None:
+        session.is_free = data.is_free
+    elif order_affecting_change and affected_client_id:
+        _recompute_client_free_sessions(database, admin.tenant_id, affected_client_id)
+
+    _log_admin_action(database, admin, "SESSION_UPDATED", "sesija", session.id)
+    database.commit()
+    database.refresh(session)
+    return _sesija_admin_payload(session)
+
+
+@app.delete("/admin/sessions/{session_id}", tags=["Admin"])
+def admin_delete_session(
+        session_id: int,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    session = database.query(Sesija).filter(Sesija.id == session_id, Sesija.tenant_id == admin.tenant_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesija not found")
+
+    links = database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == session_id, SesijaKlijent.tenant_id == admin.tenant_id).all()
+    affected_client_ids = [l.klijent_id for l in links]
+    for l in links:
+        database.delete(l)
+    database.query(SesijaGrupa).filter(SesijaGrupa.sesija_1_id == session_id, SesijaGrupa.tenant_id == admin.tenant_id).delete()
+    database.query(Cena).filter(Cena.sesija_2_id == session_id, Cena.tenant_id == admin.tenant_id).delete()
+    database.delete(session)
+    database.flush()
+
+    for cid in affected_client_ids:
+        _recompute_client_free_sessions(database, admin.tenant_id, cid)
+
+    _log_admin_action(database, admin, "SESSION_DELETED", "sesija", session_id)
+    database.commit()
+    return {"message": "Deleted", "id": session_id}
+
+
+############################################
+# Admin - Team Attendance
+############################################
+
+@app.get("/admin/team-attendance/matrix", tags=["Admin"])
+def admin_attendance_matrix(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    query = database.query(TeamMeeting).filter(TeamMeeting.tenant_id == admin.tenant_id)
+    if start_date:
+        query = query.filter(TeamMeeting.date >= start_date)
+    if end_date:
+        query = query.filter(TeamMeeting.date <= end_date)
+    meetings = query.order_by(TeamMeeting.date.asc()).all()
+    meeting_ids = [m.id for m in meetings]
+
+    therapists = database.query(UserProfile).filter(UserProfile.tenant_id == admin.tenant_id).order_by(UserProfile.created_at).all()
+    records = database.query(AttendanceRecord).filter(
+        AttendanceRecord.tenant_id == admin.tenant_id, AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
+    ).all()
+
+    matrix: dict = {}
+    for r in records:
+        matrix.setdefault(r.user_profile_id, {})[r.meeting_id] = r.status
+
+    stats = {}
+    for t in therapists:
+        rows = matrix.get(t.id, {})
+        held = len(rows)
+        present = len([s for s in rows.values() if s == "present"])
+        absent = len([s for s in rows.values() if s == "absent"])
+        excused = len([s for s in rows.values() if s == "excused"])
+        stats[t.id] = {
+            "meetings_held": held,
+            "attended": present,
+            "absent": absent,
+            "excused": excused,
+            "percentage": round(present / held * 100, 1) if held else None,
+        }
+
+    return {
+        "meetings": [{"id": m.id, "date": m.date.isoformat(), "type": m.type} for m in meetings],
+        "therapists": [{"user_profile_id": t.id, "name": _therapist_name(t), "active": t.active} for t in therapists],
+        "matrix": {str(uid): rows for uid, rows in matrix.items()},
+        "stats": {str(uid): s for uid, s in stats.items()},
+    }
+
+
+@app.get("/admin/team-attendance/meetings", tags=["Admin"])
+def admin_list_meetings(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    query = database.query(TeamMeeting).filter(TeamMeeting.tenant_id == admin.tenant_id)
+    if start_date:
+        query = query.filter(TeamMeeting.date >= start_date)
+    if end_date:
+        query = query.filter(TeamMeeting.date <= end_date)
+    meetings = query.order_by(TeamMeeting.date.desc()).all()
+
+    meeting_ids = [m.id for m in meetings]
+    records = database.query(AttendanceRecord).filter(
+        AttendanceRecord.tenant_id == admin.tenant_id, AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
+    ).all()
+    counts_by_meeting: dict = {}
+    for r in records:
+        counts_by_meeting.setdefault(r.meeting_id, Counter())[r.status] += 1
+
+    return [
+        {
+            "id": m.id,
+            "date": m.date.isoformat(),
+            "type": m.type,
+            "notes": m.notes,
+            "present": counts_by_meeting.get(m.id, Counter()).get("present", 0),
+            "absent": counts_by_meeting.get(m.id, Counter()).get("absent", 0),
+            "excused": counts_by_meeting.get(m.id, Counter()).get("excused", 0),
+        }
+        for m in meetings
+    ]
+
+
+@app.post("/admin/team-attendance/meetings", tags=["Admin"])
+def admin_create_meeting(
+        data: AdminMeetingCreate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    meeting = TeamMeeting(
+        tenant_id=admin.tenant_id,
+        date=data.date,
+        type=(data.type or "team_meeting").strip(),
+        notes=data.notes,
+        created_by_id=admin.id,
+    )
+    database.add(meeting)
+    database.commit()
+    database.refresh(meeting)
+    return {"id": meeting.id, "date": meeting.date.isoformat(), "type": meeting.type, "notes": meeting.notes}
+
+
+@app.get("/admin/team-attendance/meetings/{meeting_id}", tags=["Admin"])
+def admin_get_meeting(
+        meeting_id: int,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id, TeamMeeting.tenant_id == admin.tenant_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    therapists = database.query(UserProfile).filter(UserProfile.tenant_id == admin.tenant_id).order_by(UserProfile.created_at).all()
+    records = {
+        r.user_profile_id: r.status
+        for r in database.query(AttendanceRecord).filter(
+            AttendanceRecord.meeting_id == meeting_id, AttendanceRecord.tenant_id == admin.tenant_id
+        ).all()
+    }
+
+    return {
+        "id": meeting.id,
+        "date": meeting.date.isoformat(),
+        "type": meeting.type,
+        "notes": meeting.notes,
+        "attendance": [
+            {"user_profile_id": t.id, "name": _therapist_name(t), "active": t.active, "status": records.get(t.id)}
+            for t in therapists
+        ],
+    }
+
+
+@app.put("/admin/team-attendance/meetings/{meeting_id}/attendance", tags=["Admin"])
+def admin_update_attendance(
+        meeting_id: int,
+        data: AdminAttendanceUpdate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id, TeamMeeting.tenant_id == admin.tenant_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    existing = {
+        r.user_profile_id: r
+        for r in database.query(AttendanceRecord).filter(
+            AttendanceRecord.meeting_id == meeting_id, AttendanceRecord.tenant_id == admin.tenant_id
+        ).all()
+    }
+
+    for entry in data.records:
+        if entry.status not in ATTENDANCE_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Nepoznat status: {entry.status}")
+        therapist = database.query(UserProfile).filter(
+            UserProfile.id == entry.user_profile_id, UserProfile.tenant_id == admin.tenant_id
+        ).first()
+        if not therapist:
+            continue
+        record = existing.get(entry.user_profile_id)
+        if record:
+            record.status = entry.status
+        else:
+            database.add(AttendanceRecord(
+                tenant_id=admin.tenant_id,
+                meeting_id=meeting_id,
+                user_profile_id=entry.user_profile_id,
+                status=entry.status,
+            ))
+
+    _log_admin_action(database, admin, "ATTENDANCE_UPDATED", "team_meeting", meeting_id)
+    database.commit()
+    return {"message": "Attendance updated", "meeting_id": meeting_id}
+
+
+@app.delete("/admin/team-attendance/meetings/{meeting_id}", tags=["Admin"])
+def admin_delete_meeting(
+        meeting_id: int,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id, TeamMeeting.tenant_id == admin.tenant_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    database.delete(meeting)
+    database.commit()
+    return {"message": "Deleted", "id": meeting_id}
+
+
+############################################
+# Admin - Reports
+############################################
+
+@app.get("/admin/reports", tags=["Admin"])
+def admin_report(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    overview = _build_admin_overview(database, admin.tenant_id, start_date, end_date)
+
+    meetings_q = database.query(TeamMeeting).filter(TeamMeeting.tenant_id == admin.tenant_id)
+    if start_date:
+        meetings_q = meetings_q.filter(TeamMeeting.date >= start_date)
+    if end_date:
+        meetings_q = meetings_q.filter(TeamMeeting.date <= end_date)
+    meetings = meetings_q.all()
+    meeting_ids = [m.id for m in meetings]
+    records = database.query(AttendanceRecord).filter(
+        AttendanceRecord.tenant_id == admin.tenant_id, AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
+    ).all()
+    attendance_counts = Counter(r.status for r in records)
+
+    return {
+        **overview,
+        "attendance_summary": {
+            "meetings_held": len(meetings),
+            "present": attendance_counts.get("present", 0),
+            "absent": attendance_counts.get("absent", 0),
+            "excused": attendance_counts.get("excused", 0),
+        },
+    }
+
+
+@app.get("/admin/reports/export.csv", tags=["Admin"])
+def admin_report_export_csv(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    report = admin_report(start_date=start_date, end_date=end_date, admin=admin, database=database)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    period_label = f"{report['period']['start_date'] or 'sve'} - {report['period']['end_date'] or 'sve'}"
+    writer.writerow([f"Statistika centra ({period_label})"])
+    writer.writerow([])
+    writer.writerow(["Metrika", "Vrednost"])
+    for key, value in report["cards"].items():
+        writer.writerow([key, value])
+
+    writer.writerow([])
+    writer.writerow(["Najviše klijenata"])
+    writer.writerow(["Mesto", "Terapeut", "Broj klijenata"])
+    for row in report["full_clients_leaderboard"]:
+        writer.writerow([row["rank"], row["name"], row["count"]])
+
+    writer.writerow([])
+    writer.writerow(["Najviše sesija"])
+    writer.writerow(["Mesto", "Terapeut", "Broj sesija"])
+    for row in report["full_sessions_leaderboard"]:
+        writer.writerow([row["rank"], row["name"], row["count"]])
+
+    writer.writerow([])
+    writer.writerow(["Polna struktura"])
+    for row in report["gender_breakdown"]:
+        writer.writerow([row["gender"], row["count"]])
+
+    writer.writerow([])
+    writer.writerow(["Timski sastanci održano", report["attendance_summary"]["meetings_held"]])
+    writer.writerow(["Prisutan", report["attendance_summary"]["present"]])
+    writer.writerow(["Odsutan", report["attendance_summary"]["absent"]])
+    writer.writerow(["Opravdano odsutan", report["attendance_summary"]["excused"]])
+
+    filename = f"izvestaj_{start_date or 'sve'}_{end_date or 'sve'}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+############################################
+# Admin - Audit Log
+############################################
+
+@app.get("/admin/audit-log", tags=["Admin"])
+def admin_list_audit_log(
+        limit: int = 50,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    limit = max(1, min(limit, 200))
+    entries = database.query(AdminAuditLog).filter(AdminAuditLog.tenant_id == admin.tenant_id).order_by(AdminAuditLog.created_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": e.id,
+            "actor_email": e.actor_email,
+            "action": e.action,
+            "entity_type": e.entity_type,
+            "entity_id": e.entity_id,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in entries
+    ]
 
 
 ############################################
