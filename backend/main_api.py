@@ -3914,28 +3914,33 @@ def _log_admin_action(db: Session, admin: "UserProfile", action: str, entity_typ
     ))
 
 
-def _recompute_client_free_sessions(db: Session, tenant_id: int, klijent_id: int):
+def _recompute_client_free_sessions(db: Session, klijent_id: int):
     """Recomputes which of a client's sessions fall in the free-sessions
     window, in chronological order, whenever a session tied to them is
     created/rescheduled/cancelled/deleted. Sessions with an explicit
-    admin override (set on the individual session) are left untouched."""
+    admin override (set on the individual session) are left untouched.
+    Scoped only by klijent_id - a client's sessions are unambiguous
+    regardless of which tenant either belongs to."""
     sesija_ids = [
         row.sesija_id for row in db.query(SesijaKlijent).filter(
-            SesijaKlijent.klijent_id == klijent_id, SesijaKlijent.tenant_id == tenant_id
+            SesijaKlijent.klijent_id == klijent_id
         ).all()
     ]
     if not sesija_ids:
         return
     sessions = db.query(Sesija).filter(
-        Sesija.id.in_(sesija_ids), Sesija.tenant_id == tenant_id, Sesija.status != "otkazano"
+        Sesija.id.in_(sesija_ids), Sesija.status != "otkazano"
     ).order_by(Sesija.pocetak.asc()).all()
     for idx, s in enumerate(sessions):
         s.is_free = idx < FREE_SESSIONS_COUNT
 
 
-def _fetch_admin_base_data(db: Session, tenant_id: int):
-    clients = db.query(Klijent).filter(Klijent.tenant_id == tenant_id).all()
-    sessions = db.query(Sesija).filter(Sesija.tenant_id == tenant_id).all()
+def _fetch_admin_base_data(db: Session):
+    """The admin area is intentionally global/cross-tenant (by design -
+    every client, therapist and session in the whole application, not
+    just the calling admin's own tenant), so these are unfiltered."""
+    clients = db.query(Klijent).all()
+    sessions = db.query(Sesija).all()
     return clients, sessions
 
 
@@ -3997,9 +4002,9 @@ def _therapist_stats_from(therapist: "UserProfile", clients_all, sessions_all, s
     }
 
 
-def _build_admin_overview(database: Session, tenant_id: int, start_date: Optional[date], end_date: Optional[date]) -> dict:
-    therapists = database.query(UserProfile).filter(UserProfile.tenant_id == tenant_id).all()
-    clients_all, sessions_all = _fetch_admin_base_data(database, tenant_id)
+def _build_admin_overview(database: Session, start_date: Optional[date], end_date: Optional[date]) -> dict:
+    therapists = database.query(UserProfile).all()
+    clients_all, sessions_all = _fetch_admin_base_data(database)
 
     clients = [c for c in clients_all if _in_range(_effective_client_date(c), start_date, end_date)]
     sessions = [s for s in sessions_all if _in_range(s.pocetak.date(), start_date, end_date)]
@@ -4063,7 +4068,7 @@ def admin_dashboard(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    return _build_admin_overview(database, admin.tenant_id, start_date, end_date)
+    return _build_admin_overview(database, start_date, end_date)
 
 
 @app.get("/admin/leaderboard", tags=["Admin"])
@@ -4073,7 +4078,7 @@ def admin_leaderboard(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    overview = _build_admin_overview(database, admin.tenant_id, start_date, end_date)
+    overview = _build_admin_overview(database, start_date, end_date)
     return {
         "period": overview["period"],
         "most_clients": overview["full_clients_leaderboard"],
@@ -4092,8 +4097,8 @@ def admin_list_therapists(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    therapists = database.query(UserProfile).filter(UserProfile.tenant_id == admin.tenant_id).order_by(UserProfile.created_at).all()
-    clients_all, sessions_all = _fetch_admin_base_data(database, admin.tenant_id)
+    therapists = database.query(UserProfile).order_by(UserProfile.created_at).all()
+    clients_all, sessions_all = _fetch_admin_base_data(database)
     rows = [_therapist_stats_from(t, clients_all, sessions_all, start_date, end_date) for t in therapists]
 
     client_ranks = _rank_map([(r["user_id"], r["clients_in_range"]) for r in rows])
@@ -4129,12 +4134,12 @@ def admin_get_therapist(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    therapist = database.query(UserProfile).filter(UserProfile.id == user_id, UserProfile.tenant_id == admin.tenant_id).first()
+    therapist = database.query(UserProfile).filter(UserProfile.id == user_id).first()
     if not therapist:
         raise HTTPException(status_code=404, detail="Therapist not found")
 
-    all_therapists = database.query(UserProfile).filter(UserProfile.tenant_id == admin.tenant_id).all()
-    clients_all, sessions_all = _fetch_admin_base_data(database, admin.tenant_id)
+    all_therapists = database.query(UserProfile).all()
+    clients_all, sessions_all = _fetch_admin_base_data(database)
     all_rows = [_therapist_stats_from(t, clients_all, sessions_all, start_date, end_date) for t in all_therapists]
 
     client_ranks = _rank_map([(r["user_id"], r["clients_in_range"]) for r in all_rows])
@@ -4148,10 +4153,10 @@ def admin_get_therapist(
     stats["clients_rank_overall"] = overall_client_ranks[user_id]
     stats["sessions_rank_overall"] = overall_session_ranks[user_id]
 
-    clients = database.query(Klijent).filter(Klijent.tenant_id == admin.tenant_id, Klijent.therapist_id == user_id).order_by(Klijent.created_at.desc()).all()
-    sessions = database.query(Sesija).filter(Sesija.tenant_id == admin.tenant_id, Sesija.therapist_id == user_id).order_by(Sesija.pocetak.desc()).limit(200).all()
+    clients = database.query(Klijent).filter(Klijent.therapist_id == user_id).order_by(Klijent.created_at.desc()).all()
+    sessions = database.query(Sesija).filter(Sesija.therapist_id == user_id).order_by(Sesija.pocetak.desc()).limit(200).all()
 
-    records = database.query(AttendanceRecord).filter(AttendanceRecord.tenant_id == admin.tenant_id, AttendanceRecord.user_profile_id == user_id).all()
+    records = database.query(AttendanceRecord).filter(AttendanceRecord.user_profile_id == user_id).all()
     held = len(records)
     present = len([r for r in records if r.status == "present"])
     absent = len([r for r in records if r.status == "absent"])
@@ -4178,7 +4183,7 @@ def admin_update_therapist(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    therapist = database.query(UserProfile).filter(UserProfile.id == user_id, UserProfile.tenant_id == admin.tenant_id).first()
+    therapist = database.query(UserProfile).filter(UserProfile.id == user_id).first()
     if not therapist:
         raise HTTPException(status_code=404, detail="Therapist not found")
 
@@ -4227,7 +4232,7 @@ def admin_list_clients(
     page = max(1, page)
     page_size = max(1, min(page_size, 200))
 
-    query = database.query(Klijent).filter(Klijent.tenant_id == admin.tenant_id)
+    query = database.query(Klijent)
     if therapist_id is not None:
         query = query.filter(Klijent.therapist_id == therapist_id)
     if status:
@@ -4242,7 +4247,7 @@ def admin_list_clients(
     if start_date or end_date:
         clients = [c for c in clients if _in_range(_effective_client_date(c), start_date, end_date)]
 
-    sk_rows = database.query(SesijaKlijent.klijent_id).filter(SesijaKlijent.tenant_id == admin.tenant_id).all()
+    sk_rows = database.query(SesijaKlijent.klijent_id).all()
     counts = Counter(r.klijent_id for r in sk_rows)
 
     if sort == "name":
@@ -4278,10 +4283,14 @@ def admin_create_client(
 
     therapist = None
     if data.therapist_id is not None:
-        therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id, UserProfile.tenant_id == admin.tenant_id).first()
+        therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id).first()
         if not therapist:
             raise HTTPException(status_code=400, detail="Terapeut nije pronađen")
 
+    # A client still has to belong to some tenant (schema requirement) -
+    # new clients created from the admin area are filed under the
+    # creating admin's own tenant; the admin area itself reads/lists
+    # across every tenant regardless.
     client = Klijent(
         tenant_id=admin.tenant_id,
         ime=data.ime.strip(),
@@ -4307,17 +4316,17 @@ def admin_get_client(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    client = database.query(Klijent).filter(Klijent.id == client_id, Klijent.tenant_id == admin.tenant_id).first()
+    client = database.query(Klijent).filter(Klijent.id == client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Klijent not found")
 
     sesija_ids = [
         row.sesija_id for row in database.query(SesijaKlijent).filter(
-            SesijaKlijent.klijent_id == client_id, SesijaKlijent.tenant_id == admin.tenant_id
+            SesijaKlijent.klijent_id == client_id
         ).all()
     ]
     sessions = (
-        database.query(Sesija).filter(Sesija.id.in_(sesija_ids), Sesija.tenant_id == admin.tenant_id)
+        database.query(Sesija).filter(Sesija.id.in_(sesija_ids))
         .order_by(Sesija.pocetak.asc()).all()
         if sesija_ids else []
     )
@@ -4345,7 +4354,7 @@ def admin_update_client(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    client = database.query(Klijent).filter(Klijent.id == client_id, Klijent.tenant_id == admin.tenant_id).first()
+    client = database.query(Klijent).filter(Klijent.id == client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Klijent not found")
     if not data.ime.strip() or not data.prezime.strip():
@@ -4357,7 +4366,7 @@ def admin_update_client(
 
     therapist = None
     if data.therapist_id is not None:
-        therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id, UserProfile.tenant_id == admin.tenant_id).first()
+        therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id).first()
         if not therapist:
             raise HTTPException(status_code=400, detail="Terapeut nije pronađen")
 
@@ -4401,7 +4410,7 @@ def admin_list_sessions(
     page = max(1, page)
     page_size = max(1, min(page_size, 200))
 
-    query = database.query(Sesija).filter(Sesija.tenant_id == admin.tenant_id)
+    query = database.query(Sesija)
     if therapist_id is not None:
         query = query.filter(Sesija.therapist_id == therapist_id)
     if is_free is not None:
@@ -4414,7 +4423,7 @@ def admin_list_sessions(
     if klijent_id is not None:
         sesija_ids = [
             r.sesija_id for r in database.query(SesijaKlijent).filter(
-                SesijaKlijent.klijent_id == klijent_id, SesijaKlijent.tenant_id == admin.tenant_id
+                SesijaKlijent.klijent_id == klijent_id
             ).all()
         ]
         query = query.filter(Sesija.id.in_(sesija_ids or [-1]))
@@ -4437,21 +4446,25 @@ def admin_create_session(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    client = database.query(Klijent).filter(Klijent.id == data.klijent_id, Klijent.tenant_id == admin.tenant_id).first()
+    client = database.query(Klijent).filter(Klijent.id == data.klijent_id).first()
     if not client:
         raise HTTPException(status_code=400, detail="Klijent nije pronađen")
 
     therapist_id = data.therapist_id if data.therapist_id is not None else client.therapist_id
     if therapist_id is not None:
-        therapist = database.query(UserProfile).filter(UserProfile.id == therapist_id, UserProfile.tenant_id == admin.tenant_id).first()
+        therapist = database.query(UserProfile).filter(UserProfile.id == therapist_id).first()
         if not therapist:
             raise HTTPException(status_code=400, detail="Terapeut nije pronađen")
 
     if data.status is not None and data.status not in SESSION_STATUSES:
         raise HTTPException(status_code=400, detail="Nepoznat status")
 
+    # A session (and its client link) is filed under the CLIENT's own
+    # tenant, not the acting admin's - keeps it consistent with the rest
+    # of that practice's data even though the admin area itself reads
+    # across every tenant regardless.
     session = Sesija(
-        tenant_id=admin.tenant_id,
+        tenant_id=client.tenant_id,
         pocetak=data.pocetak,
         kraj=data.kraj or (data.pocetak + timedelta(hours=1)),
         cena=data.cena or 0.0,
@@ -4462,11 +4475,11 @@ def admin_create_session(
     database.add(session)
     database.flush()
 
-    database.add(SesijaKlijent(tenant_id=admin.tenant_id, klijent_id=client.id, sesija_id=session.id))
+    database.add(SesijaKlijent(tenant_id=client.tenant_id, klijent_id=client.id, sesija_id=session.id))
     database.flush()
 
     if data.is_free is None:
-        _recompute_client_free_sessions(database, admin.tenant_id, client.id)
+        _recompute_client_free_sessions(database, client.id)
 
     _log_admin_action(database, admin, "SESSION_CREATED", "sesija", session.id)
     database.commit()
@@ -4481,18 +4494,18 @@ def admin_update_session(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    session = database.query(Sesija).filter(Sesija.id == session_id, Sesija.tenant_id == admin.tenant_id).first()
+    session = database.query(Sesija).filter(Sesija.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Sesija not found")
 
-    link = database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == session_id, SesijaKlijent.tenant_id == admin.tenant_id).first()
+    link = database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == session_id).first()
     affected_client_id = link.klijent_id if link else None
 
     if data.therapist_id is not None:
         if data.therapist_id == 0:
             session.therapist_id = None
         else:
-            therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id, UserProfile.tenant_id == admin.tenant_id).first()
+            therapist = database.query(UserProfile).filter(UserProfile.id == data.therapist_id).first()
             if not therapist:
                 raise HTTPException(status_code=400, detail="Terapeut nije pronađen")
             session.therapist_id = therapist.id
@@ -4511,7 +4524,7 @@ def admin_update_session(
     if data.is_free is not None:
         session.is_free = data.is_free
     elif order_affecting_change and affected_client_id:
-        _recompute_client_free_sessions(database, admin.tenant_id, affected_client_id)
+        _recompute_client_free_sessions(database, affected_client_id)
 
     _log_admin_action(database, admin, "SESSION_UPDATED", "sesija", session.id)
     database.commit()
@@ -4525,21 +4538,21 @@ def admin_delete_session(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    session = database.query(Sesija).filter(Sesija.id == session_id, Sesija.tenant_id == admin.tenant_id).first()
+    session = database.query(Sesija).filter(Sesija.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Sesija not found")
 
-    links = database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == session_id, SesijaKlijent.tenant_id == admin.tenant_id).all()
+    links = database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == session_id).all()
     affected_client_ids = [l.klijent_id for l in links]
     for l in links:
         database.delete(l)
-    database.query(SesijaGrupa).filter(SesijaGrupa.sesija_1_id == session_id, SesijaGrupa.tenant_id == admin.tenant_id).delete()
-    database.query(Cena).filter(Cena.sesija_2_id == session_id, Cena.tenant_id == admin.tenant_id).delete()
+    database.query(SesijaGrupa).filter(SesijaGrupa.sesija_1_id == session_id).delete()
+    database.query(Cena).filter(Cena.sesija_2_id == session_id).delete()
     database.delete(session)
     database.flush()
 
     for cid in affected_client_ids:
-        _recompute_client_free_sessions(database, admin.tenant_id, cid)
+        _recompute_client_free_sessions(database, cid)
 
     _log_admin_action(database, admin, "SESSION_DELETED", "sesija", session_id)
     database.commit()
@@ -4557,7 +4570,7 @@ def admin_attendance_matrix(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    query = database.query(TeamMeeting).filter(TeamMeeting.tenant_id == admin.tenant_id)
+    query = database.query(TeamMeeting)
     if start_date:
         query = query.filter(TeamMeeting.date >= start_date)
     if end_date:
@@ -4565,9 +4578,9 @@ def admin_attendance_matrix(
     meetings = query.order_by(TeamMeeting.date.asc()).all()
     meeting_ids = [m.id for m in meetings]
 
-    therapists = database.query(UserProfile).filter(UserProfile.tenant_id == admin.tenant_id).order_by(UserProfile.created_at).all()
+    therapists = database.query(UserProfile).order_by(UserProfile.created_at).all()
     records = database.query(AttendanceRecord).filter(
-        AttendanceRecord.tenant_id == admin.tenant_id, AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
+        AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
     ).all()
 
     matrix: dict = {}
@@ -4604,7 +4617,7 @@ def admin_list_meetings(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    query = database.query(TeamMeeting).filter(TeamMeeting.tenant_id == admin.tenant_id)
+    query = database.query(TeamMeeting)
     if start_date:
         query = query.filter(TeamMeeting.date >= start_date)
     if end_date:
@@ -4613,7 +4626,7 @@ def admin_list_meetings(
 
     meeting_ids = [m.id for m in meetings]
     records = database.query(AttendanceRecord).filter(
-        AttendanceRecord.tenant_id == admin.tenant_id, AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
+        AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
     ).all()
     counts_by_meeting: dict = {}
     for r in records:
@@ -4658,15 +4671,15 @@ def admin_get_meeting(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id, TeamMeeting.tenant_id == admin.tenant_id).first()
+    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id).first()
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    therapists = database.query(UserProfile).filter(UserProfile.tenant_id == admin.tenant_id).order_by(UserProfile.created_at).all()
+    therapists = database.query(UserProfile).order_by(UserProfile.created_at).all()
     records = {
         r.user_profile_id: r.status
         for r in database.query(AttendanceRecord).filter(
-            AttendanceRecord.meeting_id == meeting_id, AttendanceRecord.tenant_id == admin.tenant_id
+            AttendanceRecord.meeting_id == meeting_id
         ).all()
     }
 
@@ -4689,14 +4702,14 @@ def admin_update_attendance(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id, TeamMeeting.tenant_id == admin.tenant_id).first()
+    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id).first()
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
     existing = {
         r.user_profile_id: r
         for r in database.query(AttendanceRecord).filter(
-            AttendanceRecord.meeting_id == meeting_id, AttendanceRecord.tenant_id == admin.tenant_id
+            AttendanceRecord.meeting_id == meeting_id
         ).all()
     }
 
@@ -4704,7 +4717,7 @@ def admin_update_attendance(
         if entry.status not in ATTENDANCE_STATUSES:
             raise HTTPException(status_code=400, detail=f"Nepoznat status: {entry.status}")
         therapist = database.query(UserProfile).filter(
-            UserProfile.id == entry.user_profile_id, UserProfile.tenant_id == admin.tenant_id
+            UserProfile.id == entry.user_profile_id
         ).first()
         if not therapist:
             continue
@@ -4730,7 +4743,7 @@ def admin_delete_meeting(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id, TeamMeeting.tenant_id == admin.tenant_id).first()
+    meeting = database.query(TeamMeeting).filter(TeamMeeting.id == meeting_id).first()
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
     database.delete(meeting)
@@ -4749,9 +4762,9 @@ def admin_report(
         admin: UserProfile = Depends(require_admin),
         database: Session = Depends(get_db),
 ):
-    overview = _build_admin_overview(database, admin.tenant_id, start_date, end_date)
+    overview = _build_admin_overview(database, start_date, end_date)
 
-    meetings_q = database.query(TeamMeeting).filter(TeamMeeting.tenant_id == admin.tenant_id)
+    meetings_q = database.query(TeamMeeting)
     if start_date:
         meetings_q = meetings_q.filter(TeamMeeting.date >= start_date)
     if end_date:
@@ -4759,7 +4772,7 @@ def admin_report(
     meetings = meetings_q.all()
     meeting_ids = [m.id for m in meetings]
     records = database.query(AttendanceRecord).filter(
-        AttendanceRecord.tenant_id == admin.tenant_id, AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
+        AttendanceRecord.meeting_id.in_(meeting_ids or [-1])
     ).all()
     attendance_counts = Counter(r.status for r in records)
 
@@ -4834,7 +4847,7 @@ def admin_list_audit_log(
         database: Session = Depends(get_db),
 ):
     limit = max(1, min(limit, 200))
-    entries = database.query(AdminAuditLog).filter(AdminAuditLog.tenant_id == admin.tenant_id).order_by(AdminAuditLog.created_at.desc()).limit(limit).all()
+    entries = database.query(AdminAuditLog).order_by(AdminAuditLog.created_at.desc()).limit(limit).all()
     return [
         {
             "id": e.id,
