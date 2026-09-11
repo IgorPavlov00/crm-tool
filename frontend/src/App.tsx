@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, useNavigate } from "react-router-dom";
 import { TableProvider } from "./contexts/TableContext";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ClientAuthProvider } from "./contexts/ClientAuthContext";
@@ -12,6 +12,7 @@ import LandingPage from "./pages/LandingPage";
 import ClientAuthPage from "./pages/ClientAuthPage";
 import ClientDashboard from "./pages/ClientDashboard";
 import SubscriptionPaywall from "./pages/SubscriptionPaywall";
+import AdminGate from "./pages/admin/AdminGate";
 import "./App.css";
 import "./pages/Auth.css";
 
@@ -33,6 +34,7 @@ interface SubscriptionInfo {
 // ============================================
 const AppContent: React.FC = () => {
   const { user, profile, loading, signOut } = useAuth();
+  const navigate = useNavigate();
   const [activePage, setActivePage] = useState<"admin" | "calendar">("admin");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -321,6 +323,27 @@ const AppContent: React.FC = () => {
               </svg>
               Kalendar
             </button>
+            {profile?.role === "owner" && (
+              <button
+                className="psych-sidebar-btn"
+                onClick={() => navigate("/therapist/admin")}
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M12 2 3 7v6c0 5 3.8 8.7 9 9 5.2-.3 9-4 9-9V7l-9-5z" />
+                  <path d="M9 12l2 2 4-4" />
+                </svg>
+                Admin centar
+              </button>
+            )}
           </div>
 
           {/* User info at bottom */}
@@ -485,6 +508,14 @@ function App() {
           <ClientAuthProvider>
             <ClientDashboard />
           </ClientAuthProvider>
+        }
+      />
+      <Route
+        path="/therapist/admin/*"
+        element={
+          <AuthProvider>
+            <AdminGate />
+          </AuthProvider>
         }
       />
       <Route
