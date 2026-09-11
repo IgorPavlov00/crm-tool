@@ -67,6 +67,14 @@ class UserProfile(Base):
     # rosters/assignment pickers but their historical clients/sessions stay intact.
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Center-administrator permission - deliberately NOT derived from role
+    # (owner/member). "owner" is just whoever created the tenant and may
+    # themselves be a practicing psychotherapist; is_admin is the one and
+    # only gate for the admin area (see require_admin in main_api.py) so a
+    # psychotherapist can never reach it just by being an owner or by
+    # joining via an invite link (join_tenant never sets this True).
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+
     tenant = relationship("Tenant", back_populates="user_profiles")
 
 
