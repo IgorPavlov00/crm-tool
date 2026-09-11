@@ -62,13 +62,20 @@ def seeded():
 
         owner = UserProfile(
             supabase_user_id="owner-sub", email="owner@example.com",
-            full_name="Owner Person", role="owner", tenant_id=tenant.id,
+            full_name="Owner Person", role="owner", is_admin=True, tenant_id=tenant.id,
         )
         member = UserProfile(
             supabase_user_id="member-sub", email="member@example.com",
             full_name="Member Person", role="member", tenant_id=tenant.id,
         )
-        db.add_all([owner, member])
+        # A tenant "owner" who is NOT an admin (e.g. a practicing
+        # psychotherapist who happens to hold the owner role) - proves
+        # is_admin, not role, is what gates the admin area.
+        practicing_owner = UserProfile(
+            supabase_user_id="owner-no-admin-sub", email="practicing-owner@example.com",
+            full_name="Practicing Owner", role="owner", is_admin=False, tenant_id=tenant.id,
+        )
+        db.add_all([owner, member, practicing_owner])
         db.flush()
 
         c1 = Klijent(
@@ -119,6 +126,7 @@ def seeded():
             "tenant_id": tenant.id,
             "owner_id": owner.id,
             "member_id": member.id,
+            "practicing_owner_id": practicing_owner.id,
             "c1_id": c1.id,
             "c2_id": c2.id,
             "c3_id": c3.id,
@@ -165,6 +173,47 @@ def test_unknown_account_is_rejected(seeded):
     assert resp.status_code == 401
 
 
+def test_owner_role_without_is_admin_gets_403(seeded):
+    """The exact scenario admin access must guard against: a tenant
+    'owner' who is a practicing psychotherapist, not the center admin."""
+    resp = client.get("/admin/dashboard", headers=auth_headers("owner-no-admin-sub"))
+    assert resp.status_code == 403
+
+
+def test_is_admin_is_independent_of_role(seeded):
+    resp = client.get("/admin/therapists", headers=auth_headers("owner-sub"))
+    rows = {r["user_id"]: r for r in resp.json()}
+    assert rows[seeded["owner_id"]]["is_admin"] is True
+    assert rows[seeded["practicing_owner_id"]]["role"] == "owner"
+    assert rows[seeded["practicing_owner_id"]]["is_admin"] is False
+    assert rows[seeded["member_id"]]["is_admin"] is False
+
+
+def test_admin_can_promote_and_demote_admin_status(seeded):
+    target_id = seeded["member_id"]
+
+    promote = client.patch(
+        f"/admin/therapists/{target_id}", json={"is_admin": True}, headers=auth_headers("owner-sub"),
+    )
+    assert promote.status_code == 200
+    assert promote.json()["is_admin"] is True
+    assert client.get("/admin/dashboard", headers=auth_headers("member-sub")).status_code == 200
+
+    demote = client.patch(
+        f"/admin/therapists/{target_id}", json={"is_admin": False}, headers=auth_headers("owner-sub"),
+    )
+    assert demote.status_code == 200
+    assert demote.json()["is_admin"] is False
+    assert client.get("/admin/dashboard", headers=auth_headers("member-sub")).status_code == 403
+
+
+def test_admin_cannot_revoke_own_admin_status(seeded):
+    resp = client.patch(
+        f"/admin/therapists/{seeded['owner_id']}", json={"is_admin": False}, headers=auth_headers("owner-sub"),
+    )
+    assert resp.status_code == 400
+
+
 # --------------------------------------------------------------------------
 # Dashboard calculations
 # --------------------------------------------------------------------------
@@ -172,7 +221,7 @@ def test_unknown_account_is_rejected(seeded):
 def test_dashboard_counts_all_time(seeded):
     resp = client.get("/admin/dashboard", headers=auth_headers("owner-sub"))
     cards = resp.json()["cards"]
-    assert cards["total_therapists"] == 2
+    assert cards["total_therapists"] == 3
     assert cards["total_clients"] == 3
     assert cards["female_clients"] == 2
     assert cards["male_clients"] == 1

@@ -56,8 +56,8 @@ const Forbidden: React.FC = () => (
     <div style={{ fontSize: 52, fontWeight: 700, marginBottom: 10, color: "#818cf8" }}>403</div>
     <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>Pristup odbijen</div>
     <p style={{ color: "#94a3b8", maxWidth: 420, fontSize: 14, lineHeight: 1.5 }}>
-      Admin centar je dostupan samo vlasniku prakse. Ako mislite da je ovo
-      greška, obratite se vlasniku vaše prakse.
+      Admin centar je dostupan samo administratorima centra. Ako mislite
+      da je ovo greška, obratite se administratoru vaše prakse.
     </p>
     <a
       href="/therapist"
@@ -71,8 +71,11 @@ const Forbidden: React.FC = () => (
 /**
  * Client-side gate for /therapist/admin/*. This is a UX convenience only -
  * the real enforcement is server-side: every /admin/* backend endpoint
- * verifies the caller's Supabase token itself and requires role == "owner"
- * (see require_admin in main_api.py), independent of anything checked here.
+ * verifies the caller's Supabase token itself and requires is_admin ==
+ * true (see require_admin in main_api.py), independent of anything
+ * checked here. is_admin is deliberately separate from role
+ * (owner/member) - a practicing psychotherapist never gets it just by
+ * being a tenant owner or by joining via an invite link.
  */
 const AdminGate: React.FC = () => {
   const { user, profile, loading, signOut } = useAuth();
@@ -106,7 +109,7 @@ const AdminGate: React.FC = () => {
     );
   }
 
-  if (profile.role !== "owner") return <Forbidden />;
+  if (!profile.is_admin) return <Forbidden />;
 
   return <AdminArea />;
 };

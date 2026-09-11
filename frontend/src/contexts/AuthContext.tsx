@@ -15,6 +15,11 @@ interface UserProfile {
   email: string;
   full_name: string | null;
   role: string;
+  // Independent center-administrator permission - NOT derived from role.
+  // "owner" just means whoever created the tenant, who may themselves be
+  // a practicing psychotherapist; is_admin is the only gate for the
+  // admin area (see require_admin on the backend).
+  is_admin: boolean;
   tenant_id: number;
   tenant_name: string;
 }

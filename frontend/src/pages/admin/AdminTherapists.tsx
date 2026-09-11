@@ -86,6 +86,15 @@ const AdminTherapists: React.FC = () => {
       .finally(() => setBusyId(null));
   };
 
+  const toggleAdmin = (t: Therapist) => {
+    setBusyId(t.user_id);
+    axios
+      .patch(`${backendBase}/admin/therapists/${t.user_id}`, { is_admin: !t.is_admin })
+      .then(() => load())
+      .catch((err) => setError(err?.response?.data?.detail || "Greška pri izmeni admin ovlašćenja."))
+      .finally(() => setBusyId(null));
+  };
+
   return (
     <div>
       <div className="mhc-page-header">
@@ -128,6 +137,7 @@ const AdminTherapists: React.FC = () => {
                   <th>Terapeut</th>
                   <th>Uloga</th>
                   <th>Status</th>
+                  <th>Admin</th>
                   <th>Klijenti (period)</th>
                   <th>Sesije (period)</th>
                   <th>Besplatne (period)</th>
@@ -157,13 +167,24 @@ const AdminTherapists: React.FC = () => {
                         {t.active ? "Aktivan" : "Neaktivan"}
                       </span>
                     </td>
+                    <td>
+                      <span
+                        className="mhc-badge"
+                        style={{
+                          background: t.is_admin ? "#eef2ff" : "#f1f5f9",
+                          color: t.is_admin ? "#4338ca" : "#94a3b8",
+                        }}
+                      >
+                        {t.is_admin ? "Admin" : "Terapeut"}
+                      </span>
+                    </td>
                     <td>{t.clients_in_range}</td>
                     <td>{t.sessions_in_range}</td>
                     <td>{t.free_sessions_in_range}</td>
                     <td>{t.total_clients}</td>
                     <td>{t.total_sessions}</td>
                     <td>#{t.clients_rank_in_range}</td>
-                    <td>
+                    <td style={{ display: "flex", gap: 6 }}>
                       <button
                         type="button"
                         className="mhc-btn mhc-btn-sm mhc-btn-secondary"
@@ -171,6 +192,14 @@ const AdminTherapists: React.FC = () => {
                         onClick={() => toggleActive(t)}
                       >
                         {t.active ? "Deaktiviraj" : "Aktiviraj"}
+                      </button>
+                      <button
+                        type="button"
+                        className="mhc-btn mhc-btn-sm mhc-btn-secondary"
+                        disabled={busyId === t.user_id}
+                        onClick={() => toggleAdmin(t)}
+                      >
+                        {t.is_admin ? "Oduzmi admin" : "Postavi za admina"}
                       </button>
                     </td>
                   </tr>

@@ -323,7 +323,7 @@ const AppContent: React.FC = () => {
               </svg>
               Kalendar
             </button>
-            {profile?.role === "owner" && (
+            {profile?.is_admin && (
               <button
                 className="psych-sidebar-btn"
                 onClick={() => navigate("/therapist/admin")}

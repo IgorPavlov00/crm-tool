@@ -78,6 +78,7 @@ def run_light_migrations(engine):
         "ALTER TABLE client_account ADD COLUMN photo_url TEXT",
         # Admin area (Mental Health Center management)
         "ALTER TABLE user_profile ADD COLUMN active BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE user_profile ADD COLUMN is_admin BOOLEAN",
         "ALTER TABLE klijent ADD COLUMN gender VARCHAR(20)",
         "ALTER TABLE klijent ADD COLUMN status VARCHAR(20)",
         "ALTER TABLE klijent ADD COLUMN therapist_id INTEGER",
@@ -118,6 +119,14 @@ def run_light_migrations(engine):
         # added, so old data behaves consistently with newly-created rows.
         backfill_statements = [
             "UPDATE user_profile SET active = TRUE WHERE active IS NULL",
+            # One-time bootstrap only: whoever created a tenant before the
+            # is_admin flag existed becomes that tenant's admin (matches
+            # who could already see the pre-admin-area "owner" features).
+            # Every row created after this point sets is_admin explicitly
+            # at signup time (see /auth/register-profile, /auth/login-profile,
+            # /auth/join-tenant below) - invited members always get False -
+            # so this WHERE is_admin IS NULL guard only ever fires once per row.
+            "UPDATE user_profile SET is_admin = CASE WHEN role = 'owner' THEN TRUE ELSE FALSE END WHERE is_admin IS NULL",
             "UPDATE klijent SET status = 'active' WHERE status IS NULL",
             "UPDATE klijent SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL",
             "UPDATE klijent SET updated_at = created_at WHERE updated_at IS NULL",
@@ -624,8 +633,14 @@ def require_admin(
 ) -> "UserProfile":
     """Admin-only dependency for the /admin/* routes. Resolves the caller
     from a verified bearer token (never a client-supplied header/body id),
-    and requires role == 'owner' within their own tenant. Returns the
-    UserProfile row so endpoints read tenant_id/user id from it directly."""
+    and requires is_admin == True within their own tenant. Deliberately
+    NOT gated on role == 'owner': owner is just whoever created the
+    tenant and may themselves be a practicing psychotherapist, so
+    is_admin is tracked as its own independent permission (see
+    UserProfile.is_admin in sql_alchemy.py) - a psychotherapist can never
+    reach the admin area just by being an owner or by joining via an
+    invite link. Returns the UserProfile row so endpoints read
+    tenant_id/user id from it directly."""
     supabase_user_id = get_verified_supabase_user_id(request)
 
     profile = database.query(UserProfile).filter(
@@ -634,7 +649,7 @@ def require_admin(
     if not profile:
         raise HTTPException(status_code=401, detail="No profile for this account")
 
-    if profile.role != "owner":
+    if not profile.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
     tenant = database.query(Tenant).filter(Tenant.id == profile.tenant_id).first()
@@ -3309,6 +3324,7 @@ def register_profile(
             "email": existing.email,
             "full_name": existing.full_name,
             "role": existing.role,
+            "is_admin": existing.is_admin,
             "tenant_id": existing.tenant_id,
             "tenant_name": tenant.name if tenant else ""
         }
@@ -3320,11 +3336,14 @@ def register_profile(
     database.add(new_tenant)
     database.flush()
 
+    # Whoever creates a tenant is its admin by default - a separate,
+    # independent permission from "owner" (see UserProfile.is_admin).
     new_profile = UserProfile(
         supabase_user_id=data.supabase_user_id,
         email=data.email,
         full_name=data.full_name,
         role="owner",
+        is_admin=True,
         tenant_id=new_tenant.id
     )
     database.add(new_profile)
@@ -3337,6 +3356,7 @@ def register_profile(
         "email": new_profile.email,
         "full_name": new_profile.full_name,
         "role": new_profile.role,
+        "is_admin": new_profile.is_admin,
         "tenant_id": new_tenant.id,
         "tenant_name": new_tenant.name
     }
@@ -3362,6 +3382,7 @@ def login_profile(
             email=data.email,
             full_name=data.full_name,
             role="owner",
+            is_admin=True,
             tenant_id=tenant.id
         )
 
@@ -3376,6 +3397,7 @@ def login_profile(
         "email": profile.email,
         "full_name": profile.full_name,
         "role": profile.role,
+        "is_admin": profile.is_admin,
         "tenant_id": profile.tenant_id,
         "tenant_name": tenant.name if tenant else ""
     }
@@ -3401,6 +3423,7 @@ def join_tenant(
             "email": existing.email,
             "full_name": existing.full_name,
             "role": existing.role,
+            "is_admin": existing.is_admin,
             "tenant_id": existing.tenant_id,
             "tenant_name": tenant.name if tenant else ""
         }
@@ -3409,6 +3432,8 @@ def join_tenant(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
+    # Invited members are never admins by default (is_admin stays False) -
+    # an existing admin has to promote them explicitly via the admin area.
     new_profile = UserProfile(
         supabase_user_id=data.supabase_user_id,
         email=data.email,
@@ -3426,6 +3451,7 @@ def join_tenant(
         "email": new_profile.email,
         "full_name": new_profile.full_name,
         "role": new_profile.role,
+        "is_admin": new_profile.is_admin,
         "tenant_id": new_profile.tenant_id,
         "tenant_name": tenant.name
     }
@@ -3702,6 +3728,7 @@ FREE_SESSIONS_COUNT = int(os.getenv("ADMIN_FREE_SESSIONS_COUNT", "4"))
 class AdminTherapistUpdate(BaseModel):
     full_name: Optional[str] = None
     active: Optional[bool] = None
+    is_admin: Optional[bool] = None
 
 
 class AdminClientCreate(BaseModel):
@@ -3897,6 +3924,7 @@ def _therapist_stats_from(therapist: "UserProfile", clients_all, sessions_all, s
         "email": therapist.email,
         "role": therapist.role,
         "active": therapist.active,
+        "is_admin": therapist.is_admin,
         "total_clients": len(my_clients),
         "active_clients": len([c for c in my_clients if c.status == "active"]),
         "completed_clients": len([c for c in my_clients if c.status == "completed"]),
@@ -4098,6 +4126,10 @@ def admin_update_therapist(
         if therapist.id == admin.id and not data.active:
             raise HTTPException(status_code=400, detail="Ne možete deaktivirati sopstveni nalog")
         therapist.active = data.active
+    if data.is_admin is not None:
+        if therapist.id == admin.id and not data.is_admin:
+            raise HTTPException(status_code=400, detail="Ne možete sebi oduzeti admin ovlašćenja")
+        therapist.is_admin = data.is_admin
 
     _log_admin_action(database, admin, "THERAPIST_UPDATED", "therapist", therapist.id)
     database.commit()
@@ -4108,6 +4140,7 @@ def admin_update_therapist(
         "email": therapist.email,
         "role": therapist.role,
         "active": therapist.active,
+        "is_admin": therapist.is_admin,
     }
 
 
