@@ -117,16 +117,13 @@ def run_light_migrations(engine):
 
         # Backfill defaults for rows that existed before the admin area was
         # added, so old data behaves consistently with newly-created rows.
+        # NOTE: is_admin is deliberately NOT backfilled from role == 'owner'
+        # here - admin access must always be explicit (BOOTSTRAP_ADMIN_EMAIL
+        # below, or an existing admin promoting someone in the admin area),
+        # never inherited automatically by every tenant's owner.
         backfill_statements = [
             "UPDATE user_profile SET active = TRUE WHERE active IS NULL",
-            # One-time bootstrap only: whoever created a tenant before the
-            # is_admin flag existed becomes that tenant's admin (matches
-            # who could already see the pre-admin-area "owner" features).
-            # Every row created after this point sets is_admin explicitly
-            # at signup time (see /auth/register-profile, /auth/login-profile,
-            # /auth/join-tenant below) - invited members always get False -
-            # so this WHERE is_admin IS NULL guard only ever fires once per row.
-            "UPDATE user_profile SET is_admin = CASE WHEN role = 'owner' THEN TRUE ELSE FALSE END WHERE is_admin IS NULL",
+            "UPDATE user_profile SET is_admin = FALSE WHERE is_admin IS NULL",
             "UPDATE klijent SET status = 'active' WHERE status IS NULL",
             "UPDATE klijent SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL",
             "UPDATE klijent SET updated_at = created_at WHERE updated_at IS NULL",
@@ -134,6 +131,19 @@ def run_light_migrations(engine):
         for stmt in backfill_statements:
             try:
                 conn.execute(text(stmt))
+                conn.commit()
+            except (OperationalError, ProgrammingError):
+                conn.rollback()
+
+        # One-time corrective reset: an earlier version of this migration
+        # mistakenly granted is_admin=TRUE to every tenant's owner. Set
+        # RESET_ALL_ADMIN_ACCESS=true once to wipe that out (BOOTSTRAP_ADMIN_EMAIL
+        # below re-grants it to the one account that should have it, in the
+        # same startup), then unset this env var again so a legitimate future
+        # promotion via the admin area doesn't get wiped on the next restart.
+        if os.getenv("RESET_ALL_ADMIN_ACCESS") == "true":
+            try:
+                conn.execute(text("UPDATE user_profile SET is_admin = FALSE"))
                 conn.commit()
             except (OperationalError, ProgrammingError):
                 conn.rollback()
@@ -3387,14 +3397,15 @@ def register_profile(
     database.add(new_tenant)
     database.flush()
 
-    # Whoever creates a tenant is its admin by default - a separate,
-    # independent permission from "owner" (see UserProfile.is_admin).
+    # is_admin is NOT granted automatically here, even to a new tenant's
+    # creator - it's a deliberate, separate permission (see
+    # UserProfile.is_admin) granted only via BOOTSTRAP_ADMIN_EMAIL or by
+    # an existing admin promoting someone through the admin area.
     new_profile = UserProfile(
         supabase_user_id=data.supabase_user_id,
         email=data.email,
         full_name=data.full_name,
         role="owner",
-        is_admin=True,
         tenant_id=new_tenant.id
     )
     database.add(new_profile)
@@ -3428,12 +3439,12 @@ def login_profile(
         database.add(tenant)
         database.flush()
 
+        # See register_profile above - is_admin is never granted automatically.
         profile = UserProfile(
             supabase_user_id=data.supabase_user_id,
             email=data.email,
             full_name=data.full_name,
             role="owner",
-            is_admin=True,
             tenant_id=tenant.id
         )
 
