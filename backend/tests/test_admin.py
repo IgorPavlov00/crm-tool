@@ -108,7 +108,7 @@ def seeded():
             db.flush()
             db.add(SesijaKlijent(tenant_id=tenant.id, klijent_id=c1.id, sesija_id=s.id))
         db.flush()
-        _recompute_client_free_sessions(db, tenant.id, c1.id)
+        _recompute_client_free_sessions(db, c1.id)
 
         # c3: 2 sessions in 2026 -> both free (under the free-session cutoff)
         for i in range(2):
@@ -121,7 +121,26 @@ def seeded():
             db.flush()
             db.add(SesijaKlijent(tenant_id=tenant.id, klijent_id=c3.id, sesija_id=s.id))
         db.flush()
-        _recompute_client_free_sessions(db, tenant.id, c3.id)
+        _recompute_client_free_sessions(db, c3.id)
+
+        # A second, unrelated tenant - proves the admin area is
+        # deliberately cross-tenant/global (by explicit product decision),
+        # not just correctly isolated to the admin's own tenant.
+        other_tenant = Tenant(name="Other Practice", trial_ends_at=datetime.utcnow() + timedelta(days=30))
+        db.add(other_tenant)
+        db.flush()
+        other_therapist = UserProfile(
+            supabase_user_id="other-owner-sub", email="other-owner@example.com",
+            full_name="Other Practice Owner", role="owner", tenant_id=other_tenant.id,
+        )
+        db.add(other_therapist)
+        db.flush()
+        other_client = Klijent(
+            tenant_id=other_tenant.id, ime="Zoran", prezime="Zoric", gender="other",
+            status="active", therapist_id=other_therapist.id, date_started=date(2024, 1, 1),
+        )
+        db.add(other_client)
+        db.flush()
 
         db.commit()
 
@@ -133,6 +152,9 @@ def seeded():
             "c1_id": c1.id,
             "c2_id": c2.id,
             "c3_id": c3.id,
+            "other_tenant_id": other_tenant.id,
+            "other_therapist_id": other_therapist.id,
+            "other_client_id": other_client.id,
         }
     finally:
         db.close()
@@ -283,16 +305,36 @@ def test_admin_cannot_revoke_own_admin_status(seeded):
 # --------------------------------------------------------------------------
 
 def test_dashboard_counts_all_time(seeded):
+    # Includes the second, unrelated tenant's therapist+client (see
+    # test_admin_sees_data_across_tenants below) - the admin area is
+    # deliberately global, not scoped to the admin's own tenant.
     resp = client.get("/admin/dashboard", headers=auth_headers("owner-sub"))
     cards = resp.json()["cards"]
-    assert cards["total_therapists"] == 3
-    assert cards["total_clients"] == 3
+    assert cards["total_therapists"] == 4
+    assert cards["total_clients"] == 4
     assert cards["female_clients"] == 2
     assert cards["male_clients"] == 1
-    assert cards["active_clients"] == 2
+    assert cards["other_clients"] == 1
+    assert cards["active_clients"] == 3
     assert cards["completed_clients"] == 1
     assert cards["total_sessions"] == 7
     assert cards["free_sessions"] == 6  # 4 free (c1) + 2 free (c3)
+
+
+def test_admin_sees_data_across_tenants(seeded):
+    """The actual point of this change: an admin sees every client and
+    therapist in the whole application, not just their own tenant's."""
+    clients_resp = client.get("/admin/clients", headers=auth_headers("owner-sub"), params={"page_size": 50})
+    client_ids = {c["id"] for c in clients_resp.json()["data"]}
+    assert seeded["other_client_id"] in client_ids
+
+    therapists_resp = client.get("/admin/therapists", headers=auth_headers("owner-sub"))
+    therapist_ids = {t["user_id"] for t in therapists_resp.json()}
+    assert seeded["other_therapist_id"] in therapist_ids
+
+    detail_resp = client.get(f"/admin/clients/{seeded['other_client_id']}", headers=auth_headers("owner-sub"))
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["ime"] == "Zoran"
 
 
 def test_dashboard_date_range_filter_changes_numbers(seeded):
