@@ -3323,12 +3323,18 @@ Vidimo se! <strong style="color:#6b7280;">PsihoApp</strong>
 @app.post("/internal/send-reminders", tags=["System"])
 def send_session_reminders(
         x_internal_secret: str = Header(None, alias="X-Internal-Secret"),
+        dry_run: bool = False,
         database: Session = Depends(get_db),
 ):
     """Triggered by an hourly external cron (see .github/workflows). Finds
     sessions starting 23-25h from now that haven't been reminded yet and
     emails the client. The 2-hour window means a session is covered by two
-    consecutive hourly runs, so missing one run doesn't skip its reminder."""
+    consecutive hourly runs, so missing one run doesn't skip its reminder.
+
+    dry_run=true reports exactly what would happen (matching sessions,
+    whether Resend is configured) without sending any email or marking
+    anything as reminded - safe to call to verify the pipeline is wired
+    up correctly without risking a real send to a real client."""
     if not INTERNAL_CRON_SECRET or x_internal_secret != INTERNAL_CRON_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -3342,6 +3348,27 @@ def send_session_reminders(
         Sesija.pocetak >= window_start,
         Sesija.pocetak <= window_end,
     ).all()
+
+    if dry_run:
+        would_send = []
+        would_skip = []
+        for sesija in sessions:
+            link = database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == sesija.id).first()
+            klijent = database.query(Klijent).filter(Klijent.id == link.klijent_id).first() if link else None
+            entry = {
+                "sesija_id": sesija.id,
+                "pocetak": sesija.pocetak.isoformat(),
+                "klijent_name": f"{klijent.ime} {klijent.prezime}" if klijent else None,
+                "has_email": bool(klijent and klijent.email),
+            }
+            (would_send if entry["has_email"] else would_skip).append(entry)
+        return {
+            "dry_run": True,
+            "resend_api_key_configured": bool(resend.api_key),
+            "checked": len(sessions),
+            "would_send": would_send,
+            "would_skip_no_email": would_skip,
+        }
 
     sent = 0
     skipped = 0
