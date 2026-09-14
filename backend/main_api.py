@@ -167,6 +167,35 @@ def run_light_migrations(engine):
             except (OperationalError, ProgrammingError):
                 conn.rollback()
 
+        # Historical clients/sessions predate the therapist_id column, so
+        # they're unassigned by default - which starved the leaderboards
+        # of any data. Where a tenant has exactly one team member, the
+        # assignment is unambiguous, so backfill it automatically; tenants
+        # with several members need a human to assign each client (no
+        # historical record of who actually saw whom exists to infer it).
+        solo_tenant_backfill_statements = [
+            """
+            UPDATE klijent SET therapist_id = (
+                SELECT up.id FROM user_profile up WHERE up.tenant_id = klijent.tenant_id
+            )
+            WHERE therapist_id IS NULL
+            AND (SELECT COUNT(*) FROM user_profile up2 WHERE up2.tenant_id = klijent.tenant_id) = 1
+            """,
+            """
+            UPDATE sesija SET therapist_id = (
+                SELECT up.id FROM user_profile up WHERE up.tenant_id = sesija.tenant_id
+            )
+            WHERE therapist_id IS NULL
+            AND (SELECT COUNT(*) FROM user_profile up2 WHERE up2.tenant_id = sesija.tenant_id) = 1
+            """,
+        ]
+        for stmt in solo_tenant_backfill_statements:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except (OperationalError, ProgrammingError):
+                conn.rollback()
+
 
 def init_db():
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/Class_Diagram.db")
@@ -3779,7 +3808,7 @@ def cancel_client_appointment(
 CLIENT_GENDERS = {"female", "male", "other", "unknown"}
 CLIENT_STATUSES = {"active", "completed", "archived"}
 ATTENDANCE_STATUSES = {"present", "absent", "excused"}
-SESSION_STATUSES = {"zakazano", "otkazano"}
+SESSION_STATUSES = {"zakazano", "otkazano", "besplatno"}
 
 # How many of a client's earliest sessions are free, per the center's
 # paperwork ("prvih 5ečetiri seanse su besplatne"). Configurable rather than
@@ -3824,6 +3853,10 @@ class AdminSessionCreate(BaseModel):
     status: Optional[str] = "zakazano"
     is_free: Optional[bool] = None
     cena: Optional[float] = 0.0
+    # Convenience: let the person scheduling the session set/correct the
+    # client's gender right here, instead of a separate edit trip - mainly
+    # useful for backfilling gender on older clients as they're seen again.
+    client_gender: Optional[str] = None
 
 
 class AdminSessionUpdate(BaseModel):
@@ -3833,6 +3866,7 @@ class AdminSessionUpdate(BaseModel):
     status: Optional[str] = None
     is_free: Optional[bool] = None
     cena: Optional[float] = None
+    client_gender: Optional[str] = None
 
 
 class AdminMeetingCreate(BaseModel):
@@ -3935,12 +3969,45 @@ def _recompute_client_free_sessions(db: Session, klijent_id: int):
         s.is_free = idx < FREE_SESSIONS_COUNT
 
 
+def _sesija_effective_therapist_id(s: "Sesija") -> Optional[int]:
+    """A session's attributed therapist: its own therapist_id if set,
+    otherwise inherited from its client's assigned therapist. Historical
+    sessions recorded before therapist assignment existed have no
+    therapist_id of their own, so without this fallback they'd never
+    count toward any therapist's stats even after their client gets
+    assigned to one."""
+    if s.therapist_id:
+        return s.therapist_id
+    link = s.sesijaklijent_1[0] if s.sesijaklijent_1 else None
+    return link.klijent.therapist_id if link and link.klijent else None
+
+
+def _sesija_effective_therapist(s: "Sesija") -> Optional["UserProfile"]:
+    if s.therapist:
+        return s.therapist
+    link = s.sesijaklijent_1[0] if s.sesijaklijent_1 else None
+    return link.klijent.therapist if link and link.klijent else None
+
+
+def _session_ids_via_therapist_clients(db: Session, therapist_id: int) -> list:
+    """Session ids inherited from this therapist's assigned clients (see
+    _sesija_effective_therapist_id) - for filtering sessions by therapist
+    without missing sessions that only have the attribution via their
+    client, not directly on the session itself."""
+    klijent_ids = [r.id for r in db.query(Klijent.id).filter(Klijent.therapist_id == therapist_id).all()]
+    if not klijent_ids:
+        return []
+    return [r.sesija_id for r in db.query(SesijaKlijent.sesija_id).filter(SesijaKlijent.klijent_id.in_(klijent_ids)).all()]
+
+
 def _fetch_admin_base_data(db: Session):
     """The admin area is intentionally global/cross-tenant (by design -
     every client, therapist and session in the whole application, not
     just the calling admin's own tenant), so these are unfiltered."""
     clients = db.query(Klijent).all()
     sessions = db.query(Sesija).all()
+    for s in sessions:
+        s.effective_therapist_id = _sesija_effective_therapist_id(s)
     return clients, sessions
 
 
@@ -3965,12 +4032,14 @@ def _klijent_payload(k: "Klijent") -> dict:
 def _sesija_admin_payload(s: "Sesija", session_number: Optional[int] = None) -> dict:
     link = s.sesijaklijent_1[0] if s.sesijaklijent_1 else None
     klijent = link.klijent if link else None
+    effective_therapist = s.therapist or (klijent.therapist if klijent else None)
     return {
         "id": s.id,
         "klijent_id": klijent.id if klijent else None,
         "klijent_name": f"{klijent.ime} {klijent.prezime}" if klijent else None,
-        "therapist_id": s.therapist_id,
-        "therapist_name": _therapist_name(s.therapist),
+        "therapist_id": effective_therapist.id if effective_therapist else None,
+        "therapist_name": _therapist_name(effective_therapist),
+        "therapist_assigned_directly": s.therapist_id is not None,
         "pocetak": s.pocetak.isoformat(),
         "kraj": s.kraj.isoformat() if s.kraj else None,
         "status": s.status,
@@ -3982,7 +4051,7 @@ def _sesija_admin_payload(s: "Sesija", session_number: Optional[int] = None) -> 
 
 def _therapist_stats_from(therapist: "UserProfile", clients_all, sessions_all, start_date, end_date) -> dict:
     my_clients = [c for c in clients_all if c.therapist_id == therapist.id]
-    my_sessions = [s for s in sessions_all if s.therapist_id == therapist.id]
+    my_sessions = [s for s in sessions_all if s.effective_therapist_id == therapist.id]
     clients_in_range = [c for c in my_clients if _in_range(_effective_client_date(c), start_date, end_date)]
     sessions_in_range = [s for s in my_sessions if _in_range(s.pocetak.date(), start_date, end_date)]
     return {
@@ -4014,7 +4083,7 @@ def _build_admin_overview(database: Session, start_date: Optional[date], end_dat
     names = {t.id: _therapist_name(t) for t in therapists}
 
     clients_by_therapist = Counter(c.therapist_id for c in clients if c.therapist_id)
-    sessions_by_therapist = Counter(s.therapist_id for s in sessions if s.therapist_id)
+    sessions_by_therapist = Counter(s.effective_therapist_id for s in sessions if s.effective_therapist_id)
 
     client_leaderboard = _rank_list(list(clients_by_therapist.items()), names)
     session_leaderboard = _rank_list(list(sessions_by_therapist.items()), names)
@@ -4154,7 +4223,12 @@ def admin_get_therapist(
     stats["sessions_rank_overall"] = overall_session_ranks[user_id]
 
     clients = database.query(Klijent).filter(Klijent.therapist_id == user_id).order_by(Klijent.created_at.desc()).all()
-    sessions = database.query(Sesija).filter(Sesija.therapist_id == user_id).order_by(Sesija.pocetak.desc()).limit(200).all()
+    inherited_session_ids = _session_ids_via_therapist_clients(database, user_id)
+    sessions = (
+        database.query(Sesija)
+        .filter(or_(Sesija.therapist_id == user_id, Sesija.id.in_(inherited_session_ids or [-1])))
+        .order_by(Sesija.pocetak.desc()).limit(200).all()
+    )
 
     records = database.query(AttendanceRecord).filter(AttendanceRecord.user_profile_id == user_id).all()
     held = len(records)
@@ -4412,7 +4486,8 @@ def admin_list_sessions(
 
     query = database.query(Sesija)
     if therapist_id is not None:
-        query = query.filter(Sesija.therapist_id == therapist_id)
+        inherited_ids = _session_ids_via_therapist_clients(database, therapist_id)
+        query = query.filter(or_(Sesija.therapist_id == therapist_id, Sesija.id.in_(inherited_ids or [-1])))
     if is_free is not None:
         query = query.filter(Sesija.is_free == is_free)
     start_dt, end_dt = _date_bounds(start_date, end_date)
@@ -4458,6 +4533,15 @@ def admin_create_session(
 
     if data.status is not None and data.status not in SESSION_STATUSES:
         raise HTTPException(status_code=400, detail="Nepoznat status")
+    if data.client_gender is not None:
+        if data.client_gender not in CLIENT_GENDERS:
+            raise HTTPException(status_code=400, detail="Nepoznat pol")
+        client.gender = data.client_gender
+
+    status_value = data.status or "zakazano"
+    # A "besplatno" status is itself a declaration that the session is
+    # free - it implies is_free unless an explicit is_free was also sent.
+    effective_is_free = data.is_free if data.is_free is not None else (True if status_value == "besplatno" else None)
 
     # A session (and its client link) is filed under the CLIENT's own
     # tenant, not the acting admin's - keeps it consistent with the rest
@@ -4468,9 +4552,9 @@ def admin_create_session(
         pocetak=data.pocetak,
         kraj=data.kraj or (data.pocetak + timedelta(hours=1)),
         cena=data.cena or 0.0,
-        status=data.status or "zakazano",
+        status=status_value,
         therapist_id=therapist_id,
-        is_free=data.is_free,
+        is_free=effective_is_free,
     )
     database.add(session)
     database.flush()
@@ -4478,7 +4562,7 @@ def admin_create_session(
     database.add(SesijaKlijent(tenant_id=client.tenant_id, klijent_id=client.id, sesija_id=session.id))
     database.flush()
 
-    if data.is_free is None:
+    if effective_is_free is None:
         _recompute_client_free_sessions(database, client.id)
 
     _log_admin_action(database, admin, "SESSION_CREATED", "sesija", session.id)
@@ -4519,10 +4603,23 @@ def admin_update_session(
         session.status = data.status
     if data.cena is not None:
         session.cena = data.cena
+    if data.client_gender is not None:
+        if data.client_gender not in CLIENT_GENDERS:
+            raise HTTPException(status_code=400, detail="Nepoznat pol")
+        if affected_client_id:
+            client = database.query(Klijent).filter(Klijent.id == affected_client_id).first()
+            if client:
+                client.gender = data.client_gender
+
+    # A "besplatno" status is itself a declaration that the session is
+    # free - it implies is_free unless an explicit is_free was also sent.
+    effective_is_free = data.is_free
+    if effective_is_free is None and data.status == "besplatno":
+        effective_is_free = True
 
     order_affecting_change = data.pocetak is not None or data.status is not None
-    if data.is_free is not None:
-        session.is_free = data.is_free
+    if effective_is_free is not None:
+        session.is_free = effective_is_free
     elif order_affecting_change and affected_client_id:
         _recompute_client_free_sessions(database, affected_client_id)
 

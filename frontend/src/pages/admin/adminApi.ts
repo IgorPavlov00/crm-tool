@@ -43,6 +43,7 @@ export interface SessionRow {
   klijent_name: string | null;
   therapist_id: number | null;
   therapist_name: string | null;
+  therapist_assigned_directly?: boolean;
   pocetak: string;
   kraj: string | null;
   status: string;
@@ -50,6 +51,12 @@ export interface SessionRow {
   is_free: boolean | null;
   session_number: number | null;
 }
+
+export const SESSION_STATUS_LABELS: Record<string, string> = {
+  zakazano: "Zakazano",
+  otkazano: "Otkazano",
+  besplatno: "Besplatno",
+};
 
 export interface LeaderboardRow {
   rank: number;

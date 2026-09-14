@@ -3,7 +3,7 @@ import axios from "axios";
 import { useNavigate, useParams } from "react-router-dom";
 import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams } from "./dateRange";
-import { backendBase, Client, SessionRow, formatDate, formatDateTime, GENDER_LABELS, STATUS_LABELS, STATUS_COLORS } from "./adminApi";
+import { backendBase, Client, SessionRow, formatDate, formatDateTime, GENDER_LABELS, STATUS_LABELS, STATUS_COLORS, SESSION_STATUS_LABELS } from "./adminApi";
 
 interface TherapistDetail {
   user_id: number;
@@ -173,7 +173,7 @@ const AdminTherapistDetail: React.FC = () => {
                       <tr key={s.id}>
                         <td>{s.klijent_name || "—"}</td>
                         <td>{formatDateTime(s.pocetak)}</td>
-                        <td>{s.status === "otkazano" ? "Otkazano" : "Zakazano"}</td>
+                        <td>{SESSION_STATUS_LABELS[s.status] || s.status}</td>
                         <td>{s.is_free === null ? "—" : s.is_free ? "Da" : "Ne"}</td>
                       </tr>
                     ))}

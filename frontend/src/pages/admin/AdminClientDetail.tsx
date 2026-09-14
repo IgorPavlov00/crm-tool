@@ -9,6 +9,7 @@ import {
   GENDER_LABELS,
   STATUS_LABELS,
   STATUS_COLORS,
+  SESSION_STATUS_LABELS,
   formatDate,
   formatDateTime,
 } from "./adminApi";
@@ -29,6 +30,8 @@ const AdminClientDetail: React.FC = () => {
   const [showSessionModal, setShowSessionModal] = useState(false);
   const [sessionDate, setSessionDate] = useState("");
   const [sessionTherapist, setSessionTherapist] = useState("");
+  const [sessionStatus, setSessionStatus] = useState("zakazano");
+  const [sessionGender, setSessionGender] = useState("");
   const [sessionError, setSessionError] = useState("");
   const [savingSession, setSavingSession] = useState(false);
 
@@ -51,6 +54,8 @@ const AdminClientDetail: React.FC = () => {
   const openAddSession = () => {
     setSessionDate("");
     setSessionTherapist(data?.therapist_id ? String(data.therapist_id) : "");
+    setSessionStatus("zakazano");
+    setSessionGender(data?.gender || "");
     setSessionError("");
     setShowSessionModal(true);
   };
@@ -67,6 +72,8 @@ const AdminClientDetail: React.FC = () => {
         klijent_id: Number(clientId),
         therapist_id: sessionTherapist ? Number(sessionTherapist) : null,
         pocetak: sessionDate,
+        status: sessionStatus,
+        client_gender: sessionGender || null,
       })
       .then(() => {
         setShowSessionModal(false);
@@ -163,7 +170,7 @@ const AdminClientDetail: React.FC = () => {
                     <td>{s.session_number ?? "—"}</td>
                     <td>{formatDateTime(s.pocetak)}</td>
                     <td>{s.therapist_name || "—"}</td>
-                    <td>{s.status === "otkazano" ? "Otkazano" : "Zakazano"}</td>
+                    <td>{SESSION_STATUS_LABELS[s.status] || s.status}</td>
                     <td>
                       {s.is_free === null ? (
                         "—"
@@ -208,8 +215,25 @@ const AdminClientDetail: React.FC = () => {
                 ))}
               </select>
             </div>
+            <div className="mhc-field">
+              <label>Status</label>
+              <select className="mhc-select" value={sessionStatus} onChange={(e) => setSessionStatus(e.target.value)}>
+                <option value="zakazano">{SESSION_STATUS_LABELS.zakazano}</option>
+                <option value="otkazano">{SESSION_STATUS_LABELS.otkazano}</option>
+                <option value="besplatno">{SESSION_STATUS_LABELS.besplatno}</option>
+              </select>
+            </div>
+            <div className="mhc-field">
+              <label>Pol klijenta</label>
+              <select className="mhc-select" value={sessionGender} onChange={(e) => setSessionGender(e.target.value)}>
+                <option value="">Nepoznato</option>
+                <option value="female">{GENDER_LABELS.female}</option>
+                <option value="male">{GENDER_LABELS.male}</option>
+                <option value="other">{GENDER_LABELS.other}</option>
+              </select>
+            </div>
             <p style={{ fontSize: 12, color: "#94a3b8", margin: "0 0 4px" }}>
-              Da li je sesija besplatna izračunava se automatski na osnovu redosleda klijentovih sesija.
+              Da li je sesija besplatna izračunava se automatski na osnovu redosleda klijentovih sesija (osim ako izaberete status "Besplatno").
             </p>
             {sessionError && <div className="mhc-error">{sessionError}</div>}
             <div className="mhc-modal-actions">
