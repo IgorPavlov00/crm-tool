@@ -18,6 +18,7 @@ import {
 import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams } from "./dateRange";
 import { backendBase, GENDER_LABELS, cardMeta } from "./adminApi";
+import AnimatedNumber from "./AnimatedNumber";
 
 interface DashboardData {
   period: { start_date: string | null; end_date: string | null };
@@ -50,13 +51,13 @@ const PIE_COLORS: Record<string, string> = {
   unknown: "#94a3b8",
 };
 
-const CARD_DEFS: { key: keyof DashboardData["cards"]; label: string }[] = [
+const CARD_DEFS: { key: keyof DashboardData["cards"]; label: string; hero?: boolean }[] = [
+  { key: "total_clients", label: "Ukupno klijenata", hero: true },
+  { key: "total_sessions", label: "Ukupno sesija", hero: true },
   { key: "total_therapists", label: "Ukupno terapeuta" },
   { key: "active_therapists", label: "Aktivni terapeuti" },
-  { key: "total_clients", label: "Ukupno klijenata" },
   { key: "active_clients", label: "Aktivni klijenti" },
   { key: "completed_clients", label: "Završeni klijenti" },
-  { key: "total_sessions", label: "Ukupno sesija" },
   { key: "free_sessions", label: "Besplatne sesije" },
   { key: "paid_sessions", label: "Naplaćene sesije" },
   { key: "female_clients", label: "Ženski klijenti" },
@@ -116,12 +117,14 @@ const AdminDashboard: React.FC = () => {
               const meta = cardMeta(c.key);
               return (
                 <div
-                  className="mhc-card"
+                  className={`mhc-card${c.hero ? " mhc-card-hero" : ""}`}
                   key={c.key}
                   style={{ "--card-accent": meta.color } as React.CSSProperties}
                 >
                   <div className="mhc-card-label">{c.label}</div>
-                  <div className="mhc-card-value">{data.cards[c.key]}</div>
+                  <div className="mhc-card-value">
+                    <AnimatedNumber value={data.cards[c.key]} />
+                  </div>
                 </div>
               );
             })}

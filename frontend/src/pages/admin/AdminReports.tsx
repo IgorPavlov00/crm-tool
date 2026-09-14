@@ -3,6 +3,7 @@ import axios from "axios";
 import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams, rangeLabel } from "./dateRange";
 import { backendBase, GENDER_LABELS, cardMeta } from "./adminApi";
+import AnimatedNumber from "./AnimatedNumber";
 
 interface ReportData {
   period: { start_date: string | null; end_date: string | null };
@@ -27,6 +28,8 @@ const CARD_LABELS: Record<string, string> = {
   male_clients: "Muški klijenti",
   other_clients: "Ostalo/nepoznato",
 };
+
+const HERO_CARD_KEYS = new Set(["total_clients", "total_sessions"]);
 
 const AdminReports: React.FC = () => {
   const [range, setRange] = useState<DateRange>(() => computeRange("current_year"));
@@ -98,14 +101,17 @@ const AdminReports: React.FC = () => {
           <div className="mhc-cards-grid">
             {Object.entries(CARD_LABELS).map(([key, label]) => {
               const meta = cardMeta(key);
+              const hero = HERO_CARD_KEYS.has(key);
               return (
                 <div
-                  className="mhc-card"
+                  className={`mhc-card${hero ? " mhc-card-hero" : ""}`}
                   key={key}
                   style={{ "--card-accent": meta.color } as React.CSSProperties}
                 >
                   <div className="mhc-card-label">{label}</div>
-                  <div className="mhc-card-value">{data.cards[key] ?? 0}</div>
+                  <div className="mhc-card-value">
+                    <AnimatedNumber value={data.cards[key] ?? 0} />
+                  </div>
                 </div>
               );
             })}
@@ -215,6 +221,14 @@ const AdminReports: React.FC = () => {
           }
           .mhc-card:hover, .mhc-panel:hover {
             transform: none !important;
+          }
+          .mhc-card-hero {
+            grid-column: span 2;
+          }
+          .mhc-card-hero::after,
+          .mhc-panel::before,
+          .mhc-sidebar::before {
+            display: none !important;
           }
           .mhc-panel-row { break-inside: avoid; }
           .mhc-report-header { break-after: avoid; }
