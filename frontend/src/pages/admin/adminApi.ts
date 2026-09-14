@@ -111,27 +111,25 @@ export function therapistDisplayName(t: { full_name: string | null; email: strin
 }
 
 export interface CardMeta {
-  icon: string;
-  bg: string;
   color: string;
 }
 
 const CARD_META: Record<string, CardMeta> = {
-  total_therapists: { icon: "🧑‍⚕️", bg: "#eef2ff", color: "#4338ca" },
-  active_therapists: { icon: "✅", bg: "#dcfce7", color: "#15803d" },
-  total_clients: { icon: "👥", bg: "#e0f2fe", color: "#0369a1" },
-  active_clients: { icon: "🟢", bg: "#dcfce7", color: "#15803d" },
-  completed_clients: { icon: "🏁", bg: "#fef3c7", color: "#b45309" },
-  archived_clients: { icon: "📦", bg: "#f1f5f9", color: "#64748b" },
-  total_sessions: { icon: "📅", bg: "#ede9fe", color: "#6d28d9" },
-  free_sessions: { icon: "🎁", bg: "#fce7f3", color: "#be185d" },
-  paid_sessions: { icon: "💳", bg: "#dbeafe", color: "#1e40af" },
-  female_clients: { icon: "♀", bg: "#fce7f3", color: "#be185d" },
-  male_clients: { icon: "♂", bg: "#dbeafe", color: "#1e40af" },
-  other_clients: { icon: "◆", bg: "#f1f5f9", color: "#64748b" },
+  total_therapists: { color: "#4338ca" },
+  active_therapists: { color: "#15803d" },
+  total_clients: { color: "#0369a1" },
+  active_clients: { color: "#15803d" },
+  completed_clients: { color: "#b45309" },
+  archived_clients: { color: "#64748b" },
+  total_sessions: { color: "#6d28d9" },
+  free_sessions: { color: "#be185d" },
+  paid_sessions: { color: "#1e40af" },
+  female_clients: { color: "#be185d" },
+  male_clients: { color: "#1e40af" },
+  other_clients: { color: "#64748b" },
 };
 
-const DEFAULT_CARD_META: CardMeta = { icon: "📊", bg: "#eef2ff", color: "#4338ca" };
+const DEFAULT_CARD_META: CardMeta = { color: "#4338ca" };
 
 export function cardMeta(key: string): CardMeta {
   return CARD_META[key] || DEFAULT_CARD_META;

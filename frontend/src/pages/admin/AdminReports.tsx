@@ -102,11 +102,8 @@ const AdminReports: React.FC = () => {
                 <div
                   className="mhc-card"
                   key={key}
-                  style={{ "--card-accent": meta.color, "--icon-bg": meta.bg, "--icon-color": meta.color } as React.CSSProperties}
+                  style={{ "--card-accent": meta.color } as React.CSSProperties}
                 >
-                  <div className="mhc-card-top">
-                    <div className="mhc-card-icon">{meta.icon}</div>
-                  </div>
                   <div className="mhc-card-label">{label}</div>
                   <div className="mhc-card-value">{data.cards[key] ?? 0}</div>
                 </div>
