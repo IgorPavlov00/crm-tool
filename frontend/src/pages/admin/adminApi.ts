@@ -7,6 +7,7 @@ export interface Therapist {
   role: string;
   active: boolean;
   is_admin: boolean;
+  is_approved: boolean;
   total_clients: number;
   active_clients: number;
   completed_clients: number;

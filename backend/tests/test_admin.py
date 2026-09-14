@@ -67,18 +67,18 @@ def seeded():
 
         owner = UserProfile(
             supabase_user_id="owner-sub", email="owner@example.com",
-            full_name="Owner Person", role="owner", is_admin=True, tenant_id=tenant.id,
+            full_name="Owner Person", role="owner", is_admin=True, is_approved=True, tenant_id=tenant.id,
         )
         member = UserProfile(
             supabase_user_id="member-sub", email="member@example.com",
-            full_name="Member Person", role="member", tenant_id=tenant.id,
+            full_name="Member Person", role="member", is_approved=True, tenant_id=tenant.id,
         )
         # A tenant "owner" who is NOT an admin (e.g. a practicing
         # psychotherapist who happens to hold the owner role) - proves
         # is_admin, not role, is what gates the admin area.
         practicing_owner = UserProfile(
             supabase_user_id="owner-no-admin-sub", email="practicing-owner@example.com",
-            full_name="Practicing Owner", role="owner", is_admin=False, tenant_id=tenant.id,
+            full_name="Practicing Owner", role="owner", is_admin=False, is_approved=True, tenant_id=tenant.id,
         )
         db.add_all([owner, member, practicing_owner])
         db.flush()
@@ -820,3 +820,79 @@ def test_public_intake_request_requires_contact_info_and_content(monkeypatch):
         json={"ime": "A", "prezime": "B", "email": "a@example.com", "tags": []},
     )
     assert no_tags_no_opis.status_code == 400
+
+
+# --------------------------------------------------------------------------
+# New-registration approval workflow
+# --------------------------------------------------------------------------
+
+def test_new_registrations_default_to_unapproved(seeded):
+    """register_profile/login_profile/join_tenant must report is_approved
+    so the frontend can gate access before an admin approves them."""
+    resp = client.post(
+        "/auth/register-profile",
+        json={
+            "supabase_user_id": "brand-new-sub", "email": "brand-new@example.com",
+            "full_name": "Brand New", "practice_name": "Brand New Practice",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_approved"] is False
+
+
+def test_unapproved_account_cannot_use_admin_even_if_promoted(seeded):
+    """Defense in depth: is_admin alone isn't enough - require_admin also
+    checks is_approved, so a pending account can't reach the admin area
+    even if somehow flagged as admin."""
+    db = SessionLocal()
+    try:
+        pending = UserProfile(
+            supabase_user_id="pending-admin-sub", email="pending-admin@example.com",
+            full_name="Pending Admin", role="owner", is_admin=True,  # is_approved defaults to False
+            tenant_id=seeded["tenant_id"],
+        )
+        db.add(pending)
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/admin/dashboard", headers=auth_headers("pending-admin-sub"))
+    assert resp.status_code == 403
+
+
+def test_admin_can_approve_pending_therapist_and_email_is_sent(seeded, monkeypatch):
+    sent_emails = []
+    monkeypatch.setattr(main_api.resend.Emails, "send", lambda payload: sent_emails.append(payload))
+
+    db = SessionLocal()
+    try:
+        pending = UserProfile(
+            supabase_user_id="pending-therapist-sub", email="pending-therapist@example.com",
+            full_name="Pending Therapist", role="member",  # is_approved defaults to False
+            tenant_id=seeded["tenant_id"],
+        )
+        db.add(pending)
+        db.commit()
+        db.refresh(pending)
+        pending_id = pending.id
+    finally:
+        db.close()
+
+    # Not approved yet -> can't do anything requiring approval.
+    still_pending = client.get("/admin/dashboard", headers=auth_headers("pending-therapist-sub"))
+    assert still_pending.status_code == 403
+
+    # Non-admin cannot approve.
+    forbidden = client.post(f"/admin/therapists/{pending_id}/approve", headers=auth_headers("member-sub"))
+    assert forbidden.status_code == 403
+
+    approve = client.post(f"/admin/therapists/{pending_id}/approve", headers=auth_headers("owner-sub"))
+    assert approve.status_code == 200
+    assert approve.json()["is_approved"] is True
+
+    assert len(sent_emails) == 1
+    assert sent_emails[0]["to"] == ["pending-therapist@example.com"]
+
+    listing = client.get("/admin/therapists", headers=auth_headers("owner-sub"))
+    row = next(r for r in listing.json() if r["user_id"] == pending_id)
+    assert row["is_approved"] is True

@@ -95,6 +95,15 @@ const AdminTherapists: React.FC = () => {
       .finally(() => setBusyId(null));
   };
 
+  const approveTherapist = (t: Therapist) => {
+    setBusyId(t.user_id);
+    axios
+      .post(`${backendBase}/admin/therapists/${t.user_id}/approve`)
+      .then(() => load())
+      .catch((err) => setError(err?.response?.data?.detail || "Greška pri odobravanju terapeuta."))
+      .finally(() => setBusyId(null));
+  };
+
   return (
     <div>
       <div className="mhc-page-header">
@@ -137,6 +146,7 @@ const AdminTherapists: React.FC = () => {
                   <th>Terapeut</th>
                   <th>Uloga</th>
                   <th>Status</th>
+                  <th>Odobrenje</th>
                   <th>Admin</th>
                   <th>Klijenti (period)</th>
                   <th>Sesije (period)</th>
@@ -171,6 +181,17 @@ const AdminTherapists: React.FC = () => {
                       <span
                         className="mhc-badge"
                         style={{
+                          background: t.is_approved ? "#dcfce7" : "#fef3c7",
+                          color: t.is_approved ? "#15803d" : "#b45309",
+                        }}
+                      >
+                        {t.is_approved ? "Odobren" : "Na čekanju"}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className="mhc-badge"
+                        style={{
                           background: t.is_admin ? "#eef2ff" : "#f1f5f9",
                           color: t.is_admin ? "#4338ca" : "#94a3b8",
                         }}
@@ -184,7 +205,17 @@ const AdminTherapists: React.FC = () => {
                     <td>{t.total_clients}</td>
                     <td>{t.total_sessions}</td>
                     <td>#{t.clients_rank_in_range}</td>
-                    <td style={{ display: "flex", gap: 6 }}>
+                    <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {!t.is_approved && (
+                        <button
+                          type="button"
+                          className="mhc-btn mhc-btn-sm mhc-btn-primary"
+                          disabled={busyId === t.user_id}
+                          onClick={() => approveTherapist(t)}
+                        >
+                          Odobri
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="mhc-btn mhc-btn-sm mhc-btn-secondary"

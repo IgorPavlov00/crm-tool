@@ -3,6 +3,7 @@ import axios from "axios";
 import { useAuth } from "../../contexts/AuthContext";
 import AuthPage from "../AuthPage";
 import SubscriptionPaywall from "../SubscriptionPaywall";
+import PendingApprovalPage from "../PendingApprovalPage";
 import AdminArea from "./AdminArea";
 import { backendBase } from "./adminApi";
 
@@ -97,6 +98,7 @@ const AdminGate: React.FC = () => {
 
   if (loading) return <Spinner />;
   if (!user || !profile) return <AuthPage />;
+  if (!profile.is_approved) return <PendingApprovalPage email={profile.email} onSignOut={signOut} />;
   if (subLoading) return <Spinner />;
 
   if (subscription && !subscription.active) {
