@@ -36,6 +36,10 @@ INVITE_TOKEN_TTL_SECONDS = 7 * 24 * 3600  # invite links are valid for 7 days
 # as X-Internal-Secret to trigger /internal/send-reminders. Unset in prod = disabled.
 INTERNAL_CRON_SECRET = os.getenv("INTERNAL_CRON_SECRET")
 
+# Where public "Find a Therapist" booking requests get emailed for manual
+# review/assignment (see public_book_session below).
+PUBLIC_INTAKE_NOTIFY_EMAIL = os.getenv("PUBLIC_INTAKE_NOTIFY_EMAIL", "czmzns@gmail.com")
+
 ############################################
 #
 #   Initialize the database
@@ -3217,6 +3221,48 @@ Hvala vam na poverenju. <strong style="color:#6b7280;">PsihoApp</strong>
         logger.error(f"Failed to send booking notification to therapist: {e}")
 
 
+def send_public_intake_request_email(tenant: "Tenant", klijent: "Klijent", data: "PublicBookingRequest"):
+    """A client submitted a request through the public 'Find a Therapist'
+    flow - notifies the center admin so a person assigns the client to
+    the appropriate therapist, rather than the system auto-booking a
+    confirmed session with whichever therapist happened to be matched."""
+    napomena_row = (
+        f'<div style="font-size:14px;color:#555;margin-top:12px;"><strong>Poruka klijenta:</strong> {data.napomena}</div>'
+        if data.napomena else ""
+    )
+    html = f"""
+<div style="background:#f2f2f7;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;color:#1a1a1a;">
+<div style="max-width:520px;margin:auto;">
+<div style="background:#fff;border-radius:16px;padding:28px 24px 24px;margin-bottom:8px;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+<div style="font-size:22px;margin-bottom:8px;">📩 Novi zahtev klijenta</div>
+<div style="font-size:15px;color:#1a1a1a;">Klijent je preko stranice "Pronađi terapeuta" poslao zahtev za praksu <strong>{tenant.name}</strong>. Dodelite terapeuta ručno u Admin centru (Klijenti).</div>
+</div>
+<div style="background:#fff;border-radius:16px;padding:24px;margin-bottom:8px;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+<div style="border:1.5px dashed #d1d5db;border-radius:12px;padding:20px;">
+<div style="font-size:15px;font-weight:600;color:#111;margin-bottom:6px;">{klijent.ime} {klijent.prezime}</div>
+<div style="font-size:14px;color:#555;">{klijent.email}{" · " + klijent.broj_telefona if klijent.broj_telefona else ""}</div>
+<div style="font-size:14px;color:#555;margin-top:10px;">📅 Traženi termin: <strong>{format_date_long(data.pocetak)}</strong>, {format_time(data.pocetak)}–{format_time(data.kraj)}</div>
+<div style="font-size:14px;color:#555;margin-top:6px;">🏷️ Kategorije prakse: {tenant.specialties or "—"}</div>
+{napomena_row}
+</div>
+</div>
+<div style="text-align:center;font-size:13px;color:#9ca3af;margin-top:14px;line-height:1.5;">
+<strong style="color:#6b7280;">PsihoApp</strong>
+</div>
+</div>
+</div>
+"""
+    try:
+        resend.Emails.send({
+            "from": "PsihoApp <noreply@hrioapp.com>",
+            "to": [PUBLIC_INTAKE_NOTIFY_EMAIL],
+            "subject": f"📩 Novi zahtev klijenta - {klijent.ime} {klijent.prezime}",
+            "html": html,
+        })
+    except Exception as e:
+        logger.error(f"Failed to send public intake request email: {e}")
+
+
 @app.post("/public/therapists/{tenant_id}/book", tags=["Public"])
 def public_book_session(
         tenant_id: int,
@@ -3247,38 +3293,44 @@ def public_book_session(
         database.add(klijent)
         database.flush()
 
-    sesija = Sesija(
-        tenant_id=tenant_id,
-        pocetak=data.pocetak,
-        kraj=data.kraj,
-        cena=tenant.default_price or 0,
-        status="zakazano",
-    )
-    database.add(sesija)
-    database.flush()
-
-    database.add(SesijaKlijent(
-        tenant_id=tenant_id,
-        klijent_id=klijent.id,
-        sesija_id=sesija.id,
-    ))
+    # Disabled per product decision: the system no longer auto-books a
+    # confirmed session with an automatically-matched therapist. An admin
+    # now reviews each public request (emailed below) and assigns the
+    # client to the appropriate therapist manually in the admin area.
+    # Left here, commented out, in case this needs to be restored.
+    #
+    # sesija = Sesija(
+    #     tenant_id=tenant_id,
+    #     pocetak=data.pocetak,
+    #     kraj=data.kraj,
+    #     cena=tenant.default_price or 0,
+    #     status="zakazano",
+    # )
+    # database.add(sesija)
+    # database.flush()
+    #
+    # database.add(SesijaKlijent(
+    #     tenant_id=tenant_id,
+    #     klijent_id=klijent.id,
+    #     sesija_id=sesija.id,
+    # ))
+    #
+    # therapist_emails = [
+    #     p.email for p in
+    #     database.query(UserProfile).filter(UserProfile.tenant_id == tenant_id).all()
+    # ]
+    # send_public_booking_emails(tenant.name, therapist_emails, klijent, sesija, data.napomena)
 
     database.commit()
-    database.refresh(sesija)
+    database.refresh(klijent)
 
-    therapist_emails = [
-        p.email for p in
-        database.query(UserProfile).filter(UserProfile.tenant_id == tenant_id).all()
-    ]
-    send_public_booking_emails(tenant.name, therapist_emails, klijent, sesija, data.napomena)
+    send_public_intake_request_email(tenant, klijent, data)
 
     return {
-        "sesija_id": sesija.id,
         "tenant_name": tenant.name,
-        "therapist_name": get_owner_name(tenant_id, database) or tenant.name,
         "klijent_ime": f"{klijent.ime} {klijent.prezime}",
-        "pocetak": sesija.pocetak.isoformat(),
-        "kraj": sesija.kraj.isoformat(),
+        "pocetak": data.pocetak.isoformat(),
+        "kraj": data.kraj.isoformat(),
     }
 
 

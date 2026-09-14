@@ -2,13 +2,14 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import HomeLink from "../components/HomeLink";
 
-type AuthView = "login" | "register" | "setup-practice";
+type AuthView = "login" | "register" | "setup-practice" | "forgot-password";
 
 const AuthPage: React.FC = () => {
   const {
     signIn,
     signUp,
     signInWithGoogle,
+    resetPassword,
     createProfile,
     user,
     inviteTenantName,
@@ -40,6 +41,25 @@ const AuthPage: React.FC = () => {
       setError(result.error);
     } else if (result.needsProfile) {
       setView("setup-practice");
+    }
+
+    setLoading(false);
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setSuccessMessage("");
+    setLoading(true);
+
+    const result = await resetPassword(email);
+
+    if (result.error) {
+      setError(result.error);
+    } else {
+      setSuccessMessage(
+        "Ako nalog sa ovim email-om postoji, poslali smo link za postavljanje lozinke. Ovo radi i za naloge napravljene preko Google-a.",
+      );
     }
 
     setLoading(false);
@@ -162,6 +182,76 @@ const AuthPage: React.FC = () => {
         </div>
       );
     }
+  }
+
+  if (view === "forgot-password") {
+    return (
+      <div className="auth-container">
+        <HomeLink />
+        <div className="auth-card">
+          <div className="auth-header">
+            <div className="auth-logo">
+              <svg
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#6366f1"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+              </svg>
+            </div>
+            <h1 className="auth-title">Zaboravljena lozinka</h1>
+            <p className="auth-subtitle">
+              Unesite email i poslaćemo vam link za postavljanje (ili
+              resetovanje) lozinke — radi i ako ste se prijavili preko Google-a.
+            </p>
+          </div>
+
+          {error && <div className="auth-error">{error}</div>}
+          {successMessage && <div className="auth-success">{successMessage}</div>}
+
+          <form onSubmit={handleForgotPassword} className="auth-form">
+            <div className="auth-field">
+              <label>Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="maja@example.com"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="auth-btn auth-btn-primary"
+              disabled={loading}
+            >
+              {loading ? "Slanje..." : "Pošalji link"}
+            </button>
+          </form>
+
+          <div className="auth-toggle">
+            <p>
+              <button
+                type="button"
+                onClick={() => {
+                  setView("login");
+                  setError("");
+                  setSuccessMessage("");
+                }}
+              >
+                ← Nazad na prijavu
+              </button>
+            </p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -298,6 +388,23 @@ const AuthPage: React.FC = () => {
                 : "Registruj se"}
           </button>
         </form>
+
+        {view === "login" && (
+          <div className="auth-toggle">
+            <p>
+              <button
+                type="button"
+                onClick={() => {
+                  setView("forgot-password");
+                  setError("");
+                  setSuccessMessage("");
+                }}
+              >
+                Zaboravili lozinku?
+              </button>
+            </p>
+          </div>
+        )}
 
         {/* Toggle login/register */}
         <div className="auth-toggle">

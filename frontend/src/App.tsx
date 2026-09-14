@@ -12,6 +12,7 @@ import LandingPage from "./pages/LandingPage";
 import ClientAuthPage from "./pages/ClientAuthPage";
 import ClientDashboard from "./pages/ClientDashboard";
 import SubscriptionPaywall from "./pages/SubscriptionPaywall";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 import AdminGate from "./pages/admin/AdminGate";
 import "./App.css";
 import "./pages/Auth.css";
@@ -33,7 +34,7 @@ interface SubscriptionInfo {
 // Main app content (shown when authenticated)
 // ============================================
 const AppContent: React.FC = () => {
-  const { user, profile, loading, signOut } = useAuth();
+  const { user, profile, loading, signOut, passwordRecoveryPending } = useAuth();
   const navigate = useNavigate();
   const [activePage, setActivePage] = useState<"admin" | "calendar">("admin");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -131,6 +132,12 @@ const AppContent: React.FC = () => {
         </svg>
       </div>
     );
+  }
+
+  // Just followed a password-reset email link - must set a new password
+  // before continuing, regardless of whether a profile already exists.
+  if (passwordRecoveryPending) {
+    return <ResetPasswordPage />;
   }
 
   // Not logged in — show auth page
