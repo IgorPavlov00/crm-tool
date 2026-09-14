@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { Routes, Route, NavLink, Navigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import AdminDashboard from "./AdminDashboard";
@@ -30,10 +30,29 @@ const initials = (name: string | null | undefined): string => {
 
 const AdminArea: React.FC = () => {
   const { profile } = useAuth();
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("mhc_sidebar_collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("mhc_sidebar_collapsed", next ? "1" : "0");
+      } catch {
+        /* ignore storage errors (private mode, etc.) */
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="mhc-shell">
-      <nav className="mhc-sidebar">
+      <nav className={`mhc-sidebar${collapsed ? " collapsed" : ""}`}>
         <div className="mhc-sidebar-header">
           <div className="mhc-sidebar-avatar">{initials(profile?.tenant_name)}</div>
           <div style={{ minWidth: 0 }}>
@@ -46,15 +65,21 @@ const AdminArea: React.FC = () => {
             <NavLink
               key={item.to}
               to={item.to}
+              title={collapsed ? item.label : undefined}
               className={({ isActive }) => `mhc-nav-item ${isActive ? "active" : ""}`}
             >
               <span className="mhc-nav-icon">{item.icon}</span>
-              {item.label}
+              <span className="mhc-nav-label">{item.label}</span>
             </NavLink>
           ))}
         </div>
-        <a href="/therapist" className="mhc-back-link">
-          ← Nazad na aplikaciju
+        <button type="button" className="mhc-sidebar-collapse-btn" onClick={toggleCollapsed}>
+          <span className="mhc-nav-icon">{collapsed ? "»" : "«"}</span>
+          <span className="mhc-nav-label">Suzi meni</span>
+        </button>
+        <a href="/therapist" className="mhc-back-link" title={collapsed ? "Nazad na aplikaciju" : undefined}>
+          <span className="mhc-nav-icon">←</span>
+          <span className="mhc-nav-label">Nazad na aplikaciju</span>
         </a>
       </nav>
       <main className="mhc-main">
