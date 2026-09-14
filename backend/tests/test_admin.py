@@ -20,6 +20,7 @@ os.environ["SUPABASE_JWT_SECRET"] = "test-secret-for-pytest-do-not-use-in-prod"
 os.environ.pop("SUPABASE_URL", None)  # keep the JWKS client unconfigured by default; individual tests monkeypatch it in
 os.environ.setdefault("DATABASE_URL", "sqlite:///./tests/_test_admin.db")
 os.environ["ADMIN_FREE_SESSIONS_COUNT"] = "4"
+os.environ["INTERNAL_CRON_SECRET"] = "test-internal-secret-for-pytest"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -608,3 +609,103 @@ def test_invalid_attendance_status_rejected(seeded):
         headers=auth_headers("owner-sub"),
     )
     assert resp.status_code == 400
+
+
+# --------------------------------------------------------------------------
+# Regular (non-admin) booking flow now attributes to the logged-in member
+# --------------------------------------------------------------------------
+
+def test_regular_client_and_session_creation_attributes_to_logged_in_member(seeded):
+    """A therapist booking through the normal (non-admin) Calendar flow
+    should show up as that client's assigned therapist in the admin area -
+    this used to stay 'Nedodeljen' forever since the regular endpoints
+    never recorded who created anything."""
+    headers = {**auth_headers("member-sub"), "X-Tenant-ID": str(seeded["tenant_id"])}
+
+    client_resp = client.post("/klijent/", json={"ime": "Regular", "prezime": "Client"}, headers=headers)
+    assert client_resp.status_code == 200
+    new_client_id = client_resp.json()["id"]
+    assert client_resp.json()["therapist_id"] == seeded["member_id"]
+
+    session_resp = client.post(
+        "/sesija/",
+        json={
+            "cena": 0, "status": "besplatno",
+            "pocetak": "2025-09-01T10:00:00", "kraj": "2025-09-01T11:00:00",
+            "klijent_id": new_client_id,
+        },
+        headers=headers,
+    )
+    assert session_resp.status_code == 200
+    assert session_resp.json()["therapist_id"] == seeded["member_id"]
+    assert session_resp.json()["is_free"] is True
+
+    # cleanup so shared fixture totals stay stable for other tests
+    client.delete(f"/sesija/{session_resp.json()['id']}/", headers=headers)
+    client.delete(f"/klijent/{new_client_id}/", headers=headers)
+
+
+def test_regular_creation_without_token_leaves_therapist_unassigned(seeded):
+    """No Authorization header at all (e.g. an older cached frontend
+    build) must keep working exactly as before - just without attribution."""
+    headers = {"X-Tenant-ID": str(seeded["tenant_id"])}
+    resp = client.post("/klijent/", json={"ime": "Anon", "prezime": "Client"}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["therapist_id"] is None
+    client.delete(f"/klijent/{resp.json()['id']}/", headers=headers)
+
+
+# --------------------------------------------------------------------------
+# Session reminders
+# --------------------------------------------------------------------------
+
+def test_reminder_endpoint_requires_correct_secret(seeded):
+    assert client.post("/internal/send-reminders").status_code == 401
+    assert client.post(
+        "/internal/send-reminders", headers={"X-Internal-Secret": "wrong-secret"}
+    ).status_code == 401
+
+
+def test_reminder_dry_run_reports_without_sending_or_marking(seeded):
+    """Proves the reminder pipeline finds the right sessions without
+    risking an actual email send to a real client - safe to call
+    against production to verify config (e.g. resend_api_key_configured)."""
+    client_resp = client.post(
+        "/admin/clients",
+        json={"ime": "Reminder", "prezime": "Test", "email": "reminder-test@example.com"},
+        headers=auth_headers("owner-sub"),
+    )
+    assert client_resp.status_code == 200
+    reminder_client_id = client_resp.json()["id"]
+
+    tomorrow = datetime.utcnow() + timedelta(hours=24)
+    session_resp = client.post(
+        "/admin/sessions",
+        json={"klijent_id": reminder_client_id, "pocetak": tomorrow.isoformat(), "status": "zakazano"},
+        headers=auth_headers("owner-sub"),
+    )
+    assert session_resp.status_code == 200
+    session_id = session_resp.json()["id"]
+
+    resp = client.post(
+        "/internal/send-reminders",
+        params={"dry_run": "true"},
+        headers={"X-Internal-Secret": "test-internal-secret-for-pytest"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["resend_api_key_configured"] is False  # RESEND_API_KEY isn't set in tests
+    matching = [s for s in body["would_send"] if s["sesija_id"] == session_id]
+    assert len(matching) == 1
+    assert matching[0]["has_email"] is True
+
+    # Confirm dry_run really didn't mark it as reminded (a real run would).
+    db = SessionLocal()
+    try:
+        refreshed = db.query(Sesija).filter(Sesija.id == session_id).first()
+        assert refreshed.reminder_sent is False
+    finally:
+        db.close()
+
+    client.delete(f"/admin/sessions/{session_id}", headers=auth_headers("owner-sub"))
