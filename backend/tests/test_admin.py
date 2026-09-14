@@ -767,3 +767,56 @@ def test_public_booking_sends_intake_email_without_auto_creating_session(monkeyp
 
     assert len(sent_emails) == 1
     assert sent_emails[0]["to"] == [main_api.PUBLIC_INTAKE_NOTIFY_EMAIL]
+
+
+# --------------------------------------------------------------------------
+# Simplified public intake (no more therapist matching/self-booking)
+# --------------------------------------------------------------------------
+
+def test_public_intake_request_creates_unassigned_client_and_emails_admin(monkeypatch):
+    sent_emails = []
+    monkeypatch.setattr(main_api.resend.Emails, "send", lambda payload: sent_emails.append(payload))
+
+    resp = client.post(
+        "/public/intake-request",
+        json={
+            "ime": "Nova", "prezime": "Osoba", "email": "nova-osoba@example.com",
+            "telefon": "0601234567", "tags": ["Anksioznost", "Nesanica"],
+            "opis": "Ne mogu da spavam poslednjih nedelju dana.",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["klijent_ime"] == "Nova Osoba"
+
+    db = SessionLocal()
+    try:
+        tenant = db.query(Tenant).filter(Tenant.name == main_api.PUBLIC_INTAKE_TENANT_NAME).first()
+        assert tenant is not None
+        new_client = db.query(Klijent).filter(
+            Klijent.tenant_id == tenant.id, Klijent.email == "nova-osoba@example.com"
+        ).first()
+        assert new_client is not None
+        assert new_client.therapist_id is None  # admin assigns manually
+    finally:
+        db.close()
+
+    assert len(sent_emails) == 1
+    assert sent_emails[0]["to"] == [main_api.PUBLIC_INTAKE_NOTIFY_EMAIL]
+    assert "Anksioznost" in sent_emails[0]["html"]
+    assert "Ne mogu da spavam" in sent_emails[0]["html"]
+
+
+def test_public_intake_request_requires_contact_info_and_content(monkeypatch):
+    monkeypatch.setattr(main_api.resend.Emails, "send", lambda payload: None)
+
+    missing_email = client.post(
+        "/public/intake-request",
+        json={"ime": "A", "prezime": "B", "email": "", "tags": ["Anksioznost"]},
+    )
+    assert missing_email.status_code == 400
+
+    no_tags_no_opis = client.post(
+        "/public/intake-request",
+        json={"ime": "A", "prezime": "B", "email": "a@example.com", "tags": []},
+    )
+    assert no_tags_no_opis.status_code == 400

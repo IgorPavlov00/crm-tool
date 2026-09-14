@@ -219,7 +219,7 @@ const ClientDashboard: React.FC = () => {
           <p style={{ color: "#fca5a5", fontSize: 13, marginBottom: 16 }}>{error}</p>
         )}
 
-        <AnimatePresence mode="wait">
+        <React.Fragment>
           {tab === "termini" ? (
             <motion.div key="termini" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
               <h3 style={sectionHeading}>Nadolazeći termini</h3>
@@ -356,7 +356,7 @@ const ClientDashboard: React.FC = () => {
               </div>
             </motion.div>
           )}
-        </AnimatePresence>
+        </React.Fragment>
       </div>
     </div>
   );

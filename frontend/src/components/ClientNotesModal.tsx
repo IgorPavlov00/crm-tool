@@ -324,7 +324,7 @@ const ClientNotesModal: React.FC<Props> = ({ klijent, onClose }) => {
 
         {/* Body */}
         <div style={{ padding: "20px 28px 28px", overflowY: "auto", flex: 1 }}>
-          <AnimatePresence mode="wait">
+          <React.Fragment>
             {tab === "napomene" ? (
               <motion.div
                 key="napomene"
@@ -553,7 +553,7 @@ const ClientNotesModal: React.FC<Props> = ({ klijent, onClose }) => {
                 )}
               </motion.div>
             )}
-          </AnimatePresence>
+          </React.Fragment>
         </div>
       </motion.div>
     </motion.div>
