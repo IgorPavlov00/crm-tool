@@ -378,6 +378,132 @@ def test_free_sessions_count_is_configurable():
     assert FREE_SESSIONS_COUNT == 4  # set via ADMIN_FREE_SESSIONS_COUNT above
 
 
+def test_besplatno_status_implies_is_free(seeded):
+    resp = client.post(
+        "/admin/sessions",
+        json={"klijent_id": seeded["c1_id"], "pocetak": "2025-08-01T10:00:00", "status": "besplatno"},
+        headers=auth_headers("owner-sub"),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "besplatno"
+    assert body["is_free"] is True
+
+    # Clean up so later exact-total assertions elsewhere in this file aren't affected.
+    client.delete(f"/admin/sessions/{body['id']}", headers=auth_headers("owner-sub"))
+
+
+def test_session_scheduling_can_set_client_gender(seeded):
+    resp = client.post(
+        "/admin/sessions",
+        json={"klijent_id": seeded["c2_id"], "pocetak": "2025-08-02T10:00:00", "client_gender": "other"},
+        headers=auth_headers("owner-sub"),
+    )
+    assert resp.status_code == 200
+    session_id = resp.json()["id"]
+
+    check = client.get(f"/admin/clients/{seeded['c2_id']}", headers=auth_headers("owner-sub"))
+    assert check.json()["gender"] == "other"
+
+    # Restore c2's original gender ("male") since test_dashboard_counts_all_time
+    # asserts an exact male_clients count elsewhere in this file.
+    client.put(
+        f"/admin/clients/{seeded['c2_id']}",
+        json={
+            "ime": "Marko", "prezime": "Markovic", "status": "completed", "gender": "male",
+            "therapist_id": seeded["owner_id"], "date_completed": "2025-06-01",
+        },
+        headers=auth_headers("owner-sub"),
+    )
+    client.delete(f"/admin/sessions/{session_id}", headers=auth_headers("owner-sub"))
+
+
+def test_session_without_own_therapist_inherits_from_client(seeded):
+    """The actual bug report this fixes: leaderboards showed 0 because
+    historical sessions have no therapist_id of their own. A session
+    should still count toward its client's assigned therapist."""
+    db = SessionLocal()
+    try:
+        tenant = Tenant(name="Inherit Test Tenant", trial_ends_at=datetime.utcnow() + timedelta(days=30))
+        db.add(tenant)
+        db.flush()
+        therapist = UserProfile(
+            supabase_user_id="inherit-owner-sub", email="inherit-owner@example.com",
+            full_name="Inherit Owner", role="owner", tenant_id=tenant.id,
+        )
+        db.add(therapist)
+        db.flush()
+        c = Klijent(
+            tenant_id=tenant.id, ime="Petra", prezime="Petrovic", status="active",
+            therapist_id=therapist.id, date_started=date(2025, 5, 1),
+        )
+        db.add(c)
+        db.flush()
+        s = Sesija(
+            tenant_id=tenant.id, pocetak=datetime(2025, 5, 10), kraj=datetime(2025, 5, 10, 1),
+            cena=0, status="zakazano", therapist_id=None,  # no direct assignment
+        )
+        db.add(s)
+        db.flush()
+        db.add(SesijaKlijent(tenant_id=tenant.id, klijent_id=c.id, sesija_id=s.id))
+        db.commit()
+        therapist_id, session_id = therapist.id, s.id
+    finally:
+        db.close()
+
+    detail = client.get(f"/admin/therapists/{therapist_id}", headers=auth_headers("owner-sub"))
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["total_sessions"] == 1
+    assert session_id in {row["id"] for row in body["recent_sessions"]}
+
+    listing = client.get("/admin/sessions", headers=auth_headers("owner-sub"), params={"therapist_id": therapist_id})
+    assert session_id in {row["id"] for row in listing.json()["data"]}
+
+
+def test_solo_tenant_backfill_assigns_therapist_automatically():
+    """Where a tenant has exactly one team member, historical
+    clients/sessions with no therapist_id can be safely auto-assigned -
+    there's no ambiguity about who it could be."""
+    db = SessionLocal()
+    try:
+        tenant = Tenant(name="Solo Backfill Tenant", trial_ends_at=datetime.utcnow() + timedelta(days=30))
+        db.add(tenant)
+        db.flush()
+        solo_therapist = UserProfile(
+            supabase_user_id="solo-backfill-sub", email="solo-backfill@example.com",
+            full_name="Solo Therapist", role="owner", tenant_id=tenant.id,
+        )
+        db.add(solo_therapist)
+        db.flush()
+        c = Klijent(tenant_id=tenant.id, ime="Nikola", prezime="Nikolic", status="active", date_started=date(2025, 1, 1))
+        db.add(c)
+        db.flush()
+        s = Sesija(
+            tenant_id=tenant.id, pocetak=datetime(2025, 1, 5), kraj=datetime(2025, 1, 5, 1),
+            cena=0, status="zakazano",
+        )
+        db.add(s)
+        db.flush()
+        db.add(SesijaKlijent(tenant_id=tenant.id, klijent_id=c.id, sesija_id=s.id))
+        db.commit()
+        client_id, session_id, therapist_id = c.id, s.id, solo_therapist.id
+        engine = db.get_bind()
+    finally:
+        db.close()
+
+    main_api.run_light_migrations(engine)
+
+    db2 = SessionLocal()
+    try:
+        refreshed_client = db2.query(Klijent).filter(Klijent.id == client_id).first()
+        refreshed_session = db2.query(Sesija).filter(Sesija.id == session_id).first()
+        assert refreshed_client.therapist_id == therapist_id
+        assert refreshed_session.therapist_id == therapist_id
+    finally:
+        db2.close()
+
+
 # --------------------------------------------------------------------------
 # Completed clients / status handling
 # --------------------------------------------------------------------------

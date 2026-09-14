@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams } from "./dateRange";
-import { backendBase, SessionRow, Therapist, Client, formatDateTime } from "./adminApi";
+import { backendBase, SessionRow, Therapist, Client, formatDateTime, SESSION_STATUS_LABELS, GENDER_LABELS } from "./adminApi";
 
 const PAGE_SIZE = 25;
 
@@ -21,7 +21,7 @@ const AdminSessions: React.FC = () => {
 
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<SessionRow | null>(null);
-  const [form, setForm] = useState({ klijent_id: "", therapist_id: "", pocetak: "", status: "zakazano" });
+  const [form, setForm] = useState({ klijent_id: "", therapist_id: "", pocetak: "", status: "zakazano", client_gender: "" });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -65,21 +65,28 @@ const AdminSessions: React.FC = () => {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ klijent_id: "", therapist_id: "", pocetak: "", status: "zakazano" });
+    setForm({ klijent_id: "", therapist_id: "", pocetak: "", status: "zakazano", client_gender: "" });
     setFormError("");
     setShowModal(true);
   };
 
   const openEdit = (s: SessionRow) => {
     setEditing(s);
+    const currentClient = clients.find((c) => c.id === s.klijent_id);
     setForm({
       klijent_id: s.klijent_id ? String(s.klijent_id) : "",
       therapist_id: s.therapist_id ? String(s.therapist_id) : "",
       pocetak: s.pocetak.slice(0, 16),
       status: s.status,
+      client_gender: currentClient?.gender || "",
     });
     setFormError("");
     setShowModal(true);
+  };
+
+  const handleClientSelect = (clientId: string) => {
+    const selected = clients.find((c) => String(c.id) === clientId);
+    setForm({ ...form, klijent_id: clientId, client_gender: selected?.gender || form.client_gender });
   };
 
   const handleSave = () => {
@@ -95,12 +102,14 @@ const AdminSessions: React.FC = () => {
           therapist_id: form.therapist_id ? Number(form.therapist_id) : 0,
           pocetak: form.pocetak,
           status: form.status,
+          client_gender: form.client_gender || null,
         })
       : axios.post(`${backendBase}/admin/sessions`, {
           klijent_id: Number(form.klijent_id),
           therapist_id: form.therapist_id ? Number(form.therapist_id) : null,
           pocetak: form.pocetak,
           status: form.status,
+          client_gender: form.client_gender || null,
         });
 
     req
@@ -179,7 +188,7 @@ const AdminSessions: React.FC = () => {
                     <td>{s.therapist_name || "—"}</td>
                     <td>{s.session_number ?? "—"}</td>
                     <td>{s.is_free === null ? "—" : s.is_free ? "Da" : "Ne"}</td>
-                    <td>{s.status === "otkazano" ? "Otkazano" : "Zakazano"}</td>
+                    <td>{SESSION_STATUS_LABELS[s.status] || s.status}</td>
                     <td style={{ display: "flex", gap: 6 }}>
                       <button type="button" className="mhc-btn mhc-btn-sm mhc-btn-secondary" onClick={() => openEdit(s)}>
                         Izmeni
@@ -217,7 +226,7 @@ const AdminSessions: React.FC = () => {
             {!editing && (
               <div className="mhc-field">
                 <label>Klijent *</label>
-                <select className="mhc-select" value={form.klijent_id} onChange={(e) => setForm({ ...form, klijent_id: e.target.value })}>
+                <select className="mhc-select" value={form.klijent_id} onChange={(e) => handleClientSelect(e.target.value)}>
                   <option value="">Izaberite klijenta</option>
                   {clients.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -227,6 +236,15 @@ const AdminSessions: React.FC = () => {
                 </select>
               </div>
             )}
+            <div className="mhc-field">
+              <label>Pol klijenta</label>
+              <select className="mhc-select" value={form.client_gender} onChange={(e) => setForm({ ...form, client_gender: e.target.value })}>
+                <option value="">Nepoznato</option>
+                <option value="female">{GENDER_LABELS.female}</option>
+                <option value="male">{GENDER_LABELS.male}</option>
+                <option value="other">{GENDER_LABELS.other}</option>
+              </select>
+            </div>
             <div className="mhc-field">
               <label>Terapeut</label>
               <select className="mhc-select" value={form.therapist_id} onChange={(e) => setForm({ ...form, therapist_id: e.target.value })}>
@@ -245,8 +263,9 @@ const AdminSessions: React.FC = () => {
             <div className="mhc-field">
               <label>Status</label>
               <select className="mhc-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                <option value="zakazano">Zakazano</option>
-                <option value="otkazano">Otkazano</option>
+                <option value="zakazano">{SESSION_STATUS_LABELS.zakazano}</option>
+                <option value="otkazano">{SESSION_STATUS_LABELS.otkazano}</option>
+                <option value="besplatno">{SESSION_STATUS_LABELS.besplatno}</option>
               </select>
             </div>
 
