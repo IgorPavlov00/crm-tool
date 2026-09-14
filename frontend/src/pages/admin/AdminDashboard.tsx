@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   ResponsiveContainer,
@@ -8,17 +8,18 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  Legend,
 } from "recharts";
 import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams } from "./dateRange";
-import { backendBase, GENDER_LABELS, cardMeta } from "./adminApi";
+import { backendBase } from "./adminApi";
 import AnimatedNumber from "./AnimatedNumber";
+import "./AdminDashboard.css";
+
+interface NamedCount {
+  user_id: number;
+  name: string;
+  count: number;
+}
 
 interface DashboardData {
   period: { start_date: string | null; end_date: string | null };
@@ -39,30 +40,56 @@ interface DashboardData {
   gender_breakdown: { gender: string; count: number }[];
   monthly_sessions: { month: string; count: number }[];
   monthly_new_clients: { month: string; count: number }[];
-  sessions_per_therapist: { user_id: number; name: string; count: number }[];
+  clients_per_therapist: NamedCount[];
+  sessions_per_therapist: NamedCount[];
   top_clients_leaderboard: { rank: number; user_id: number; name: string; count: number }[];
   top_sessions_leaderboard: { rank: number; user_id: number; name: string; count: number }[];
 }
 
-const PIE_COLORS: Record<string, string> = {
-  female: "#ec4899",
-  male: "#3b82f6",
-  other: "#a855f7",
-  unknown: "#94a3b8",
-};
+const WarningIcon: React.FC = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);
 
-const CARD_DEFS: { key: keyof DashboardData["cards"]; label: string; hero?: boolean }[] = [
-  { key: "total_clients", label: "Ukupno klijenata", hero: true },
-  { key: "total_sessions", label: "Ukupno sesija", hero: true },
-  { key: "total_therapists", label: "Ukupno terapeuta" },
-  { key: "active_therapists", label: "Aktivni terapeuti" },
-  { key: "active_clients", label: "Aktivni klijenti" },
-  { key: "completed_clients", label: "Završeni klijenti" },
-  { key: "free_sessions", label: "Besplatne sesije" },
-  { key: "paid_sessions", label: "Naplaćene sesije" },
-  { key: "female_clients", label: "Ženski klijenti" },
-  { key: "male_clients", label: "Muški klijenti" },
-];
+const ChartEmptyIcon: React.FC = () => (
+  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="4" y1="20" x2="4" y2="12" />
+    <line x1="10" y1="20" x2="10" y2="7" />
+    <line x1="16" y1="20" x2="16" y2="14" />
+    <line x1="2" y1="20" x2="22" y2="20" />
+  </svg>
+);
+
+function findDuplicateTherapistNames(data: DashboardData): string[] {
+  const byId = new Map<number, string>();
+  [...data.sessions_per_therapist, ...(data.clients_per_therapist || [])].forEach((t) => {
+    if (t.name && t.name !== "—" && !byId.has(t.user_id)) {
+      byId.set(t.user_id, t.name);
+    }
+  });
+  const byLowerName = new Map<string, { name: string; user_id: number }[]>();
+  byId.forEach((name, user_id) => {
+    const key = name.trim().toLowerCase();
+    const group = byLowerName.get(key) || [];
+    group.push({ name, user_id });
+    byLowerName.set(key, group);
+  });
+  const messages: string[] = [];
+  byLowerName.forEach((group) => {
+    if (group.length < 2) return;
+    const variants = Array.from(new Set(group.map((g) => g.name)));
+    if (variants.length > 1) {
+      const label = variants.map((v) => `"${v}"`).join(" i ");
+      messages.push(`${label} su isti čovek i trenutno mu se statistika deli na ${group.length} reda.`);
+    } else {
+      messages.push(`"${variants[0]}" se pojavljuje na ${group.length} različita naloga i trenutno mu se statistika deli.`);
+    }
+  });
+  return messages;
+}
 
 const AdminDashboard: React.FC = () => {
   const [range, setRange] = useState<DateRange>(() => computeRange("current_year"));
@@ -96,8 +123,10 @@ const AdminDashboard: React.FC = () => {
     };
   }, [range]);
 
+  const duplicateWarnings = useMemo(() => (data ? findDuplicateTherapistNames(data) : []), [data]);
+
   return (
-    <div>
+    <div className="dash-root">
       <div className="mhc-page-header">
         <div>
           <h1 className="mhc-page-title">Pregled centra</h1>
@@ -112,132 +141,52 @@ const AdminDashboard: React.FC = () => {
         <div className="mhc-loading">Učitavanje statistike…</div>
       ) : data ? (
         <>
-          <div className="mhc-cards-grid">
-            {CARD_DEFS.map((c) => {
-              const meta = cardMeta(c.key);
-              return (
-                <div
-                  className={`mhc-card${c.hero ? " mhc-card-hero" : ""}`}
-                  key={c.key}
-                  style={{ "--card-accent": meta.color } as React.CSSProperties}
-                >
-                  <div className="mhc-card-label">{c.label}</div>
-                  <div className="mhc-card-value">
-                    <AnimatedNumber value={data.cards[c.key]} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <KpiCards data={data} />
 
-          <div className="mhc-panel-row">
-            <div className="mhc-panel-col">
-              <div className="mhc-panel">
-                <h3 className="mhc-panel-title">Najviše klijenata</h3>
-                <LeaderboardMini rows={data.top_clients_leaderboard} suffix="klijenata" />
+          {duplicateWarnings.length > 0 && (
+            <div className="dash-warning">
+              <WarningIcon />
+              <div className="dash-warning-lines">
+                {duplicateWarnings.map((msg) => (
+                  <span key={msg}>{msg}</span>
+                ))}
               </div>
             </div>
-            <div className="mhc-panel-col">
-              <div className="mhc-panel">
-                <h3 className="mhc-panel-title">Najviše sesija</h3>
-                <LeaderboardMini rows={data.top_sessions_leaderboard} suffix="sesija" />
+          )}
+
+          <div className="dash-panel-row">
+            <div className="dash-panel-col">
+              <div className="dash-panel">
+                <h3 className="dash-panel-title">Najviše klijenata</h3>
+                <LeaderboardRows rows={data.top_clients_leaderboard} />
+              </div>
+            </div>
+            <div className="dash-panel-col">
+              <div className="dash-panel">
+                <h3 className="dash-panel-title">Najviše sesija</h3>
+                <LeaderboardRows rows={data.top_sessions_leaderboard} />
               </div>
             </div>
           </div>
 
-          <div className="mhc-panel-row">
-            <div className="mhc-panel-col">
-              <div className="mhc-panel">
-                <h3 className="mhc-panel-title">Sesije po mesecima</h3>
-                {data.monthly_sessions.length === 0 ? (
-                  <div className="mhc-empty">Nema podataka za izabrani period.</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={240}>
-                    <LineChart data={data.monthly_sessions}>
-                      <defs>
-                        <linearGradient id="mhcSessionsLine" x1="0" y1="0" x2="1" y2="0">
-                          <stop offset="0%" stopColor="#6366f1" />
-                          <stop offset="100%" stopColor="#a855f7" />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#eef1f6" vertical={false} />
-                      <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" axisLine={false} tickLine={false} />
-                      <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="#94a3b8" axisLine={false} tickLine={false} />
-                      <Tooltip
-                        contentStyle={{ borderRadius: 10, border: "1px solid #eef1f6", fontSize: 12.5, boxShadow: "0 8px 24px rgba(15,23,42,0.12)" }}
-                        cursor={{ stroke: "#c7d2fe", strokeWidth: 1.5 }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="count"
-                        stroke="url(#mhcSessionsLine)"
-                        strokeWidth={3}
-                        dot={{ r: 3.5, fill: "#6366f1", strokeWidth: 0 }}
-                        activeDot={{ r: 5.5 }}
-                        name="Sesije"
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                )}
+          <div className="dash-panel-row">
+            <div className="dash-panel-col">
+              <div className="dash-panel">
+                <h3 className="dash-panel-title">Sesije po mesecima</h3>
+                <MonthlySessionsChart monthly={data.monthly_sessions} />
               </div>
             </div>
-            <div className="mhc-panel-col">
-              <div className="mhc-panel">
-                <h3 className="mhc-panel-title">Polna struktura klijenata</h3>
-                {data.gender_breakdown.length === 0 ? (
-                  <div className="mhc-empty">Nema podataka za izabrani period.</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={240}>
-                    <PieChart>
-                      <Pie
-                        data={data.gender_breakdown}
-                        dataKey="count"
-                        nameKey="gender"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={80}
-                        label={(entry: any) => `${GENDER_LABELS[entry.gender] || entry.gender}: ${entry.count}`}
-                      >
-                        {data.gender_breakdown.map((g) => (
-                          <Cell key={g.gender} fill={PIE_COLORS[g.gender] || "#cbd5e1"} stroke="#fff" strokeWidth={2} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{ borderRadius: 10, border: "1px solid #eef1f6", fontSize: 12.5, boxShadow: "0 8px 24px rgba(15,23,42,0.12)" }}
-                        formatter={(value: any, _name: any, entry: any) => [value, GENDER_LABELS[entry?.payload?.gender] || entry?.payload?.gender]}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                )}
+            <div className="dash-panel-col">
+              <div className="dash-panel">
+                <h3 className="dash-panel-title">Polna struktura</h3>
+                <GenderStackedBar cards={data.cards} />
               </div>
             </div>
           </div>
 
-          <div className="mhc-panel">
-            <h3 className="mhc-panel-title">Sesije po terapeutu</h3>
-            {data.sessions_per_therapist.length === 0 ? (
-              <div className="mhc-empty">Nema podataka za izabrani period.</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={Math.max(200, data.sessions_per_therapist.length * 36)}>
-                <BarChart data={data.sessions_per_therapist} layout="vertical" margin={{ left: 40 }}>
-                  <defs>
-                    <linearGradient id="mhcBarGradient" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#6366f1" />
-                      <stop offset="100%" stopColor="#a855f7" />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eef1f6" horizontal={false} />
-                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} stroke="#94a3b8" axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11.5 }} stroke="#94a3b8" axisLine={false} tickLine={false} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: 10, border: "1px solid #eef1f6", fontSize: 12.5, boxShadow: "0 8px 24px rgba(15,23,42,0.12)" }}
-                    cursor={{ fill: "#f5f3ff" }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 12.5 }} />
-                  <Bar dataKey="count" name="Sesije" fill="url(#mhcBarGradient)" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
+          <div className="dash-panel">
+            <h3 className="dash-panel-title">Sesije po terapeutu</h3>
+            <SessionsPerTherapistBars rows={data.sessions_per_therapist} />
           </div>
         </>
       ) : null}
@@ -245,22 +194,170 @@ const AdminDashboard: React.FC = () => {
   );
 };
 
-const LeaderboardMini: React.FC<{ rows: { rank: number; name: string; count: number }[]; suffix: string }> = ({ rows, suffix }) => {
-  if (rows.length === 0) {
-    return <div className="mhc-empty">Nema podataka za izabrani period.</div>;
-  }
+const KpiCards: React.FC<{ data: DashboardData }> = ({ data }) => {
+  const { cards, sessions_per_therapist } = data;
+  const therapistsWithSessions = sessions_per_therapist.length;
+  const sessionsPerClient = cards.total_clients > 0 ? cards.total_sessions / cards.total_clients : 0;
+  const paidPct = cards.total_sessions > 0 ? Math.round((cards.paid_sessions / cards.total_sessions) * 100) : 0;
+  const therapistsSub =
+    cards.total_therapists > 0 && cards.active_therapists === cards.total_therapists
+      ? "svi aktivni"
+      : `${cards.active_therapists} aktivnih`;
+
+  const kpis = [
+    {
+      key: "clients",
+      label: "Klijenti",
+      value: cards.total_clients,
+      sub: `${cards.active_clients} aktivnih · ${cards.completed_clients} završenih`,
+    },
+    {
+      key: "therapists",
+      label: "Terapeuti",
+      value: cards.total_therapists,
+      sub: `${therapistsSub} · ${therapistsWithSessions} sa sesijama`,
+    },
+    {
+      key: "sessions",
+      label: "Sesije",
+      value: cards.total_sessions,
+      sub: `${sessionsPerClient.toFixed(1)} po klijentu`,
+    },
+    {
+      key: "paid",
+      label: "Naplaćene sesije",
+      value: cards.paid_sessions,
+      sub: `${paidPct}% od ukupnih`,
+    },
+  ];
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {rows.map((r) => (
-        <div key={r.rank + r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span className={`mhc-rank-badge${r.rank <= 3 ? ` mhc-rank-${r.rank}` : ""}`}>{r.rank}</span>
-          <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: "#1e293b" }}>{r.name}</span>
-          <span style={{ fontSize: 12.5, color: "#64748b" }}>
-            {r.count} {suffix}
-          </span>
+    <div className="dash-cards">
+      {kpis.map((k) => (
+        <div className="dash-kpi" key={k.key}>
+          <div className="dash-kpi-label">{k.label}</div>
+          <div className="dash-kpi-value">
+            <AnimatedNumber value={k.value} />
+          </div>
+          <div className="dash-kpi-sub">{k.sub}</div>
         </div>
       ))}
     </div>
+  );
+};
+
+const LeaderboardRows: React.FC<{ rows: { rank: number; name: string; count: number }[] }> = ({ rows }) => {
+  if (rows.length === 0) {
+    return <div className="dash-empty">Nema podataka za izabrani period.</div>;
+  }
+  const max = Math.max(...rows.map((r) => r.count), 1);
+  return (
+    <div>
+      {rows.map((r) => (
+        <div className="dash-lb-row" key={r.rank + r.name}>
+          <span className="dash-lb-rank">{r.rank}.</span>
+          <span className="dash-lb-name">{r.name}</span>
+          <span className="dash-lb-track">
+            <span className="dash-lb-fill" style={{ width: `${(r.count / max) * 100}%` }} />
+          </span>
+          <span className="dash-lb-count">{r.count}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const GENDER_SEGMENTS: { key: "female" | "male" | "unknown"; label: string; color: string }[] = [
+  { key: "female", label: "Žensko", color: "var(--dash-female)" },
+  { key: "male", label: "Muško", color: "var(--dash-accent)" },
+  { key: "unknown", label: "Nepoznato", color: "var(--dash-unknown)" },
+];
+
+const GenderStackedBar: React.FC<{ cards: DashboardData["cards"] }> = ({ cards }) => {
+  const counts: Record<string, number> = {
+    female: cards.female_clients,
+    male: cards.male_clients,
+    unknown: cards.other_clients,
+  };
+  const total = counts.female + counts.male + counts.unknown;
+
+  if (total === 0) {
+    return <div className="dash-empty">Nema podataka za izabrani period.</div>;
+  }
+
+  return (
+    <div>
+      <div className="dash-stack-bar">
+        {GENDER_SEGMENTS.map((seg) => (
+          <span
+            key={seg.key}
+            className="dash-stack-seg"
+            style={{ flex: `${counts[seg.key]} 0 0`, background: seg.color }}
+          />
+        ))}
+      </div>
+      <div className="dash-legend">
+        {GENDER_SEGMENTS.map((seg) => {
+          const count = counts[seg.key];
+          const pct = Math.round((count / total) * 100);
+          return (
+            <div className="dash-legend-item" key={seg.key}>
+              <span className="dash-legend-dot" style={{ background: seg.color }} />
+              {seg.label}: <span className="dash-legend-value">{count} · {pct}%</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const SessionsPerTherapistBars: React.FC<{ rows: NamedCount[] }> = ({ rows }) => {
+  if (rows.length === 0) {
+    return <div className="dash-empty">Nema podataka za izabrani period.</div>;
+  }
+  const max = Math.max(...rows.map((r) => r.count), 1);
+  return (
+    <div className="dash-bars-block">
+      {rows.map((r) => (
+        <div className="dash-bar-row" key={r.user_id}>
+          <span className="dash-bar-name">{r.name}</span>
+          <span className="dash-bar-track">
+            <span className="dash-bar-fill" style={{ width: `${(r.count / max) * 100}%` }} />
+          </span>
+          <span className="dash-bar-value">{r.count}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const MonthlySessionsChart: React.FC<{ monthly: { month: string; count: number }[] }> = ({ monthly }) => {
+  if (monthly.length < 2) {
+    return (
+      <div className="dash-chart-empty">
+        <ChartEmptyIcon />
+        {monthly.length === 1 ? (
+          <>
+            <div className="dash-chart-empty-title">Samo jedan mesec sa podacima ({monthly[0].month})</div>
+            <div className="dash-chart-empty-sub">Trend se prikazuje od drugog meseca</div>
+          </>
+        ) : (
+          <div className="dash-chart-empty-title">Nema podataka za izabrani period</div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <LineChart data={monthly}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e5e9" vertical={false} />
+        <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#8a94a1" axisLine={false} tickLine={false} />
+        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="#8a94a1" axisLine={false} tickLine={false} />
+        <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid #e2e5e9", fontSize: 12.5 }} />
+        <Line type="monotone" dataKey="count" stroke="#2a78d6" strokeWidth={2} dot={{ r: 3, fill: "#2a78d6", strokeWidth: 0 }} activeDot={{ r: 5 }} name="Sesije" />
+      </LineChart>
+    </ResponsiveContainer>
   );
 };
 
