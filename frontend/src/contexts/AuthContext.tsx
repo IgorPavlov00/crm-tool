@@ -42,6 +42,10 @@ interface AuthContextType {
   ) => Promise<{ error?: string; needsProfile?: boolean }>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
+  resetPassword: (email: string) => Promise<{ error?: string }>;
+  updatePassword: (newPassword: string) => Promise<{ error?: string }>;
+  passwordRecoveryPending: boolean;
+  clearPasswordRecovery: () => void;
   createProfile: (
     practiceName: string,
     fullName?: string,
@@ -67,6 +71,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [inviteTenantName, setInviteTenantName] = useState<string | null>(null);
+  // True right after following a password-reset email link - the app must
+  // show a "set new password" screen instead of proceeding straight into
+  // the normal app, even though Supabase already has a (recovery) session.
+  const [passwordRecoveryPending, setPasswordRecoveryPending] = useState(false);
 
   const backendBase = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -202,6 +210,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, s) => {
       if (!mounted) return;
+
+      if (_event === "PASSWORD_RECOVERY") {
+        setPasswordRecoveryPending(true);
+      }
 
       setSession(s);
       setUser(s?.user ?? null);
@@ -347,6 +359,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
+  // Lets anyone log in with email/password, including accounts that
+  // originally signed up via Google - Supabase never sets a password on
+  // an OAuth-created account, so email/password login fails for them
+  // until they go through this reset flow once to set one.
+  const resetPassword = async (email: string): Promise<{ error?: string }> => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/therapist?type=recovery`,
+    });
+    if (error) return { error: error.message };
+    return {};
+  };
+
+  const updatePassword = async (
+    newPassword: string,
+  ): Promise<{ error?: string }> => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) return { error: error.message };
+    return {};
+  };
+
   const createProfile = async (
     practiceName: string,
     fullName?: string,
@@ -392,6 +424,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         signIn,
         signInWithGoogle,
         signOut,
+        resetPassword,
+        updatePassword,
+        passwordRecoveryPending,
+        clearPasswordRecovery: () => setPasswordRecoveryPending(false),
         createProfile,
         clearInvite,
       }}

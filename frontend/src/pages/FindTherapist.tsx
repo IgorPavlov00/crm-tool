@@ -160,7 +160,6 @@ const FindTherapist: React.FC = () => {
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState<{
     tenant_name: string;
-    therapist_name?: string;
     pocetak: string;
   } | null>(null);
 
@@ -245,7 +244,6 @@ const FindTherapist: React.FC = () => {
       );
       setConfirmed({
         tenant_name: res.data.tenant_name,
-        therapist_name: res.data.therapist_name,
         pocetak: res.data.pocetak,
       });
       setStep("done");
@@ -1031,11 +1029,12 @@ const FindTherapist: React.FC = () => {
                   color: "#0f172a",
                 }}
               >
-                Termin je zakazan!
+                Zahtev je poslat!
               </h3>
               <p style={{ color: "#64748b", fontSize: 14, margin: 0 }}>
-                {confirmed.therapist_name || confirmed.tenant_name} vas očekuje{" "}
-                <strong>{formatDateTime(confirmed.pocetak)}</strong>.
+                Vaš zahtev za praksu <strong>{confirmed.tenant_name}</strong> je primljen za
+                termin <strong>{formatDateTime(confirmed.pocetak)}</strong>. Uskoro će vas
+                kontaktirati u vezi sa zakazivanjem.
               </p>
               {clientProfile && (
                 <motion.button
