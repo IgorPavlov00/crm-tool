@@ -20,6 +20,14 @@ const NAV_ITEMS = [
   { to: "reports", label: "Izveštaji", icon: "☷" },
 ];
 
+const initials = (name: string | null | undefined): string => {
+  if (!name) return "A";
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "A";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
 const AdminArea: React.FC = () => {
   const { profile } = useAuth();
 
@@ -27,8 +35,11 @@ const AdminArea: React.FC = () => {
     <div className="mhc-shell">
       <nav className="mhc-sidebar">
         <div className="mhc-sidebar-header">
-          <div className="mhc-sidebar-title">Admin centar</div>
-          <div className="mhc-sidebar-sub">{profile?.tenant_name}</div>
+          <div className="mhc-sidebar-avatar">{initials(profile?.tenant_name)}</div>
+          <div style={{ minWidth: 0 }}>
+            <div className="mhc-sidebar-title">Admin centar</div>
+            <div className="mhc-sidebar-sub">{profile?.tenant_name}</div>
+          </div>
         </div>
         <div className="mhc-nav">
           {NAV_ITEMS.map((item) => (
