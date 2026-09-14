@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import axios from "axios";
 import {
   ResponsiveContainer,
@@ -41,19 +41,10 @@ interface DashboardData {
   gender_breakdown: { gender: string; count: number }[];
   monthly_sessions: { month: string; count: number }[];
   monthly_new_clients: { month: string; count: number }[];
-  clients_per_therapist: NamedCount[];
   sessions_per_therapist: NamedCount[];
   top_clients_leaderboard: { rank: number; user_id: number; name: string; count: number }[];
   top_sessions_leaderboard: { rank: number; user_id: number; name: string; count: number }[];
 }
-
-const WarningIcon: React.FC = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-    <line x1="12" y1="9" x2="12" y2="13" />
-    <line x1="12" y1="17" x2="12.01" y2="17" />
-  </svg>
-);
 
 const ChartEmptyIcon: React.FC = () => (
   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -96,34 +87,6 @@ const PaidIcon: React.FC = () => (
 
 const AVATAR_COLORS = ["#5157e8", "#e2447e", "#189b63", "#c07a06"];
 
-function findDuplicateTherapistNames(data: DashboardData): string[] {
-  const byId = new Map<number, string>();
-  [...data.sessions_per_therapist, ...(data.clients_per_therapist || [])].forEach((t) => {
-    if (t.name && t.name !== "—" && !byId.has(t.user_id)) {
-      byId.set(t.user_id, t.name);
-    }
-  });
-  const byLowerName = new Map<string, { name: string; user_id: number }[]>();
-  byId.forEach((name, user_id) => {
-    const key = name.trim().toLowerCase();
-    const group = byLowerName.get(key) || [];
-    group.push({ name, user_id });
-    byLowerName.set(key, group);
-  });
-  const messages: string[] = [];
-  byLowerName.forEach((group) => {
-    if (group.length < 2) return;
-    const variants = Array.from(new Set(group.map((g) => g.name)));
-    if (variants.length > 1) {
-      const label = variants.map((v) => `"${v}"`).join(" i ");
-      messages.push(`${label} su isti čovek i trenutno mu se statistika deli na ${group.length} reda.`);
-    } else {
-      messages.push(`"${variants[0]}" se pojavljuje na ${group.length} različita naloga i trenutno mu se statistika deli.`);
-    }
-  });
-  return messages;
-}
-
 const AdminDashboard: React.FC = () => {
   const [range, setRange] = useState<DateRange>(() => computeRange("current_year"));
   const [data, setData] = useState<DashboardData | null>(null);
@@ -156,8 +119,6 @@ const AdminDashboard: React.FC = () => {
     };
   }, [range]);
 
-  const duplicateWarnings = useMemo(() => (data ? findDuplicateTherapistNames(data) : []), [data]);
-
   return (
     <div className="dash-root">
       <div className="mhc-page-header">
@@ -175,17 +136,6 @@ const AdminDashboard: React.FC = () => {
       ) : data ? (
         <>
           <KpiCards data={data} />
-
-          {duplicateWarnings.length > 0 && (
-            <div className="dash-warning">
-              <WarningIcon />
-              <div className="dash-warning-lines">
-                {duplicateWarnings.map((msg) => (
-                  <span key={msg}>{msg}</span>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="dash-panel-row">
             <div className="dash-panel-col">

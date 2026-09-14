@@ -73,10 +73,6 @@
   --gender-female: #e87ba4;
   --gender-unknown: #c3c2b7;
 
-  --warning-bg: #fdf6e3;
-  --warning-border: #f0dca0;
-  --warning-text: #7a5b00;
-
   --danger-bg: #fef2f2;
   --danger-text: #b91c1c;
   --danger-bg-hover: #fee2e2;
@@ -118,10 +114,6 @@
 
   --gender-female: #e87ba4;
   --gender-unknown: #4b5163;
-
-  --warning-bg: rgba(250, 204, 21, 0.1);
-  --warning-border: rgba(250, 204, 21, 0.3);
-  --warning-text: #f5cd52;
 
   --danger-bg: rgba(239, 68, 68, 0.12);
   --danger-text: #f87171;
