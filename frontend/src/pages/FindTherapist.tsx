@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
-import { motion, AnimatePresence, type Variants } from "framer-motion";
+import { motion, type Variants } from "framer-motion";
 import {
   SPECIALTY_TAGS,
   TAG_LABEL_BY_SLUG,
@@ -419,7 +419,7 @@ const FindTherapist: React.FC = () => {
       </motion.div>
 
       <div style={{ width: "100%", maxWidth: 720, position: "relative", zIndex: 1 }}>
-        <AnimatePresence mode="wait">
+        <React.Fragment>
           {step === "search" && (
             <motion.div
               key="search"
@@ -1048,7 +1048,7 @@ const FindTherapist: React.FC = () => {
               )}
             </motion.div>
           )}
-        </AnimatePresence>
+        </React.Fragment>
       </div>
     </div>
   );
