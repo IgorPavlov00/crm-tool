@@ -17,7 +17,7 @@ import {
 } from "recharts";
 import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams } from "./dateRange";
-import { backendBase, GENDER_LABELS } from "./adminApi";
+import { backendBase, GENDER_LABELS, cardMeta } from "./adminApi";
 
 interface DashboardData {
   period: { start_date: string | null; end_date: string | null };
@@ -112,12 +112,22 @@ const AdminDashboard: React.FC = () => {
       ) : data ? (
         <>
           <div className="mhc-cards-grid">
-            {CARD_DEFS.map((c) => (
-              <div className="mhc-card" key={c.key}>
-                <div className="mhc-card-label">{c.label}</div>
-                <div className="mhc-card-value">{data.cards[c.key]}</div>
-              </div>
-            ))}
+            {CARD_DEFS.map((c) => {
+              const meta = cardMeta(c.key);
+              return (
+                <div
+                  className="mhc-card"
+                  key={c.key}
+                  style={{ "--card-accent": meta.color, "--icon-bg": meta.bg, "--icon-color": meta.color } as React.CSSProperties}
+                >
+                  <div className="mhc-card-top">
+                    <div className="mhc-card-icon">{meta.icon}</div>
+                  </div>
+                  <div className="mhc-card-label">{c.label}</div>
+                  <div className="mhc-card-value">{data.cards[c.key]}</div>
+                </div>
+              );
+            })}
           </div>
 
           <div className="mhc-panel-row">
@@ -144,11 +154,28 @@ const AdminDashboard: React.FC = () => {
                 ) : (
                   <ResponsiveContainer width="100%" height={240}>
                     <LineChart data={data.monthly_sessions}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#eef1f6" />
-                      <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                      <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                      <Tooltip />
-                      <Line type="monotone" dataKey="count" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 3 }} name="Sesije" />
+                      <defs>
+                        <linearGradient id="mhcSessionsLine" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stopColor="#6366f1" />
+                          <stop offset="100%" stopColor="#a855f7" />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#eef1f6" vertical={false} />
+                      <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" axisLine={false} tickLine={false} />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="#94a3b8" axisLine={false} tickLine={false} />
+                      <Tooltip
+                        contentStyle={{ borderRadius: 10, border: "1px solid #eef1f6", fontSize: 12.5, boxShadow: "0 8px 24px rgba(15,23,42,0.12)" }}
+                        cursor={{ stroke: "#c7d2fe", strokeWidth: 1.5 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="count"
+                        stroke="url(#mhcSessionsLine)"
+                        strokeWidth={3}
+                        dot={{ r: 3.5, fill: "#6366f1", strokeWidth: 0 }}
+                        activeDot={{ r: 5.5 }}
+                        name="Sesije"
+                      />
                     </LineChart>
                   </ResponsiveContainer>
                 )}
@@ -172,10 +199,13 @@ const AdminDashboard: React.FC = () => {
                         label={(entry: any) => `${GENDER_LABELS[entry.gender] || entry.gender}: ${entry.count}`}
                       >
                         {data.gender_breakdown.map((g) => (
-                          <Cell key={g.gender} fill={PIE_COLORS[g.gender] || "#cbd5e1"} />
+                          <Cell key={g.gender} fill={PIE_COLORS[g.gender] || "#cbd5e1"} stroke="#fff" strokeWidth={2} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(value: any, _name: any, entry: any) => [value, GENDER_LABELS[entry?.payload?.gender] || entry?.payload?.gender]} />
+                      <Tooltip
+                        contentStyle={{ borderRadius: 10, border: "1px solid #eef1f6", fontSize: 12.5, boxShadow: "0 8px 24px rgba(15,23,42,0.12)" }}
+                        formatter={(value: any, _name: any, entry: any) => [value, GENDER_LABELS[entry?.payload?.gender] || entry?.payload?.gender]}
+                      />
                     </PieChart>
                   </ResponsiveContainer>
                 )}
@@ -190,12 +220,21 @@ const AdminDashboard: React.FC = () => {
             ) : (
               <ResponsiveContainer width="100%" height={Math.max(200, data.sessions_per_therapist.length * 36)}>
                 <BarChart data={data.sessions_per_therapist} layout="vertical" margin={{ left: 40 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eef1f6" />
-                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                  <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11.5 }} stroke="#94a3b8" />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="count" name="Sesije" fill="#7c3aed" radius={[0, 6, 6, 0]} />
+                  <defs>
+                    <linearGradient id="mhcBarGradient" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#6366f1" />
+                      <stop offset="100%" stopColor="#a855f7" />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#eef1f6" horizontal={false} />
+                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} stroke="#94a3b8" axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11.5 }} stroke="#94a3b8" axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: 10, border: "1px solid #eef1f6", fontSize: 12.5, boxShadow: "0 8px 24px rgba(15,23,42,0.12)" }}
+                    cursor={{ fill: "#f5f3ff" }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12.5 }} />
+                  <Bar dataKey="count" name="Sesije" fill="url(#mhcBarGradient)" radius={[0, 6, 6, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -214,7 +253,7 @@ const LeaderboardMini: React.FC<{ rows: { rank: number; name: string; count: num
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {rows.map((r) => (
         <div key={r.rank + r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span className="mhc-rank-badge">{r.rank}</span>
+          <span className={`mhc-rank-badge${r.rank <= 3 ? ` mhc-rank-${r.rank}` : ""}`}>{r.rank}</span>
           <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: "#1e293b" }}>{r.name}</span>
           <span style={{ fontSize: 12.5, color: "#64748b" }}>
             {r.count} {suffix}

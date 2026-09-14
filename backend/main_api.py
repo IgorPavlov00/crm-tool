@@ -15,6 +15,7 @@ from pydantic_classes import *
 from sql_alchemy import *
 import io
 import csv
+import codecs
 import jwt
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -5195,6 +5196,24 @@ def admin_report(
     }
 
 
+_REPORT_CARD_LABELS_SR = {
+    "total_therapists": "Ukupno terapeuta",
+    "active_therapists": "Aktivni terapeuti",
+    "total_clients": "Ukupno klijenata",
+    "active_clients": "Aktivni klijenti",
+    "completed_clients": "Završeni klijenti",
+    "archived_clients": "Arhivirani klijenti",
+    "total_sessions": "Ukupno sesija",
+    "free_sessions": "Besplatne sesije",
+    "paid_sessions": "Naplaćene sesije",
+    "female_clients": "Ženski klijenti",
+    "male_clients": "Muški klijenti",
+    "other_clients": "Ostalo/nepoznato",
+}
+
+_GENDER_LABELS_SR = {"female": "Žensko", "male": "Muško", "other": "Drugo", "unknown": "Nepoznato"}
+
+
 @app.get("/admin/reports/export.csv", tags=["Admin"])
 def admin_report_export_csv(
         start_date: Optional[date] = None,
@@ -5207,38 +5226,46 @@ def admin_report_export_csv(
     buf = io.StringIO()
     writer = csv.writer(buf)
     period_label = f"{report['period']['start_date'] or 'sve'} - {report['period']['end_date'] or 'sve'}"
-    writer.writerow([f"Statistika centra ({period_label})"])
-    writer.writerow([])
-    writer.writerow(["Metrika", "Vrednost"])
-    for key, value in report["cards"].items():
-        writer.writerow([key, value])
+    writer.writerow(["Statistika centra"])
+    writer.writerow(["Period", period_label])
+    writer.writerow(["Generisano", datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")])
 
     writer.writerow([])
-    writer.writerow(["Najviše klijenata"])
+    writer.writerow(["KLJUČNI POKAZATELJI"])
+    writer.writerow(["Metrika", "Vrednost"])
+    for key, value in report["cards"].items():
+        writer.writerow([_REPORT_CARD_LABELS_SR.get(key, key), value])
+
+    writer.writerow([])
+    writer.writerow(["NAJVIŠE KLIJENATA"])
     writer.writerow(["Mesto", "Terapeut", "Broj klijenata"])
     for row in report["full_clients_leaderboard"]:
         writer.writerow([row["rank"], row["name"], row["count"]])
 
     writer.writerow([])
-    writer.writerow(["Najviše sesija"])
+    writer.writerow(["NAJVIŠE SESIJA"])
     writer.writerow(["Mesto", "Terapeut", "Broj sesija"])
     for row in report["full_sessions_leaderboard"]:
         writer.writerow([row["rank"], row["name"], row["count"]])
 
     writer.writerow([])
-    writer.writerow(["Polna struktura"])
+    writer.writerow(["POLNA STRUKTURA KLIJENATA"])
+    writer.writerow(["Pol", "Broj klijenata"])
     for row in report["gender_breakdown"]:
-        writer.writerow([row["gender"], row["count"]])
+        writer.writerow([_GENDER_LABELS_SR.get(row["gender"], row["gender"]), row["count"]])
 
     writer.writerow([])
-    writer.writerow(["Timski sastanci održano", report["attendance_summary"]["meetings_held"]])
+    writer.writerow(["PRISUSTVO TIMU"])
+    writer.writerow(["Sastanaka održano", report["attendance_summary"]["meetings_held"]])
     writer.writerow(["Prisutan", report["attendance_summary"]["present"]])
     writer.writerow(["Odsutan", report["attendance_summary"]["absent"]])
     writer.writerow(["Opravdano odsutan", report["attendance_summary"]["excused"]])
 
     filename = f"izvestaj_{start_date or 'sve'}_{end_date or 'sve'}.csv"
+    # Prepend UTF-8 BOM so Excel correctly renders Serbian diacritics instead of mangling them.
+    csv_bytes = codecs.BOM_UTF8 + buf.getvalue().encode("utf-8")
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        iter([csv_bytes]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
