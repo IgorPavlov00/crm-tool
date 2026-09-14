@@ -754,6 +754,25 @@ def require_admin(
     return profile
 
 
+def get_current_member_soft(request: Request, tenant_id: int, database: Session) -> Optional["UserProfile"]:
+    """Best-effort resolution of the team member actually making a regular
+    (non-admin) request, from their verified bearer token - used to
+    auto-attribute clients/sessions they create to themselves, so the
+    admin area's per-therapist stats reflect real activity instead of
+    everything staying unassigned. Never raises: a missing/invalid token,
+    or one that doesn't match a profile in the given tenant, just means no
+    attribution happens - callers must keep working exactly as before for
+    anyone not sending a recognizable token."""
+    try:
+        supabase_user_id = get_verified_supabase_user_id(request)
+    except HTTPException:
+        return None
+    return database.query(UserProfile).filter(
+        UserProfile.supabase_user_id == supabase_user_id,
+        UserProfile.tenant_id == tenant_id,
+    ).first()
+
+
 @app.get("/tenant/subscription", tags=["Tenant"])
 def get_tenant_subscription(
         tenant_id: int = Depends(get_tenant_id),
@@ -2183,16 +2202,24 @@ async def get_sesija(
 
 @app.post("/sesija/", tags=["Sesija"])
 async def create_sesija(
+    request: Request,
     sesija_data: SesijaCreate,
     tenant_id: int = Depends(require_active_subscription),
     database: Session = Depends(get_db)
 ):
+    member = get_current_member_soft(request, tenant_id, database)
+    # A "besplatno" status is itself a declaration that the session is
+    # free, matching the same rule the admin area uses.
+    effective_is_free = True if sesija_data.status == "besplatno" else None
+
     db_sesija = Sesija(
         tenant_id=tenant_id,
         cena=sesija_data.cena,
         status=sesija_data.status,
         pocetak=sesija_data.pocetak,
-        kraj=sesija_data.kraj
+        kraj=sesija_data.kraj,
+        therapist_id=member.id if member else None,
+        is_free=effective_is_free,
     )
     database.add(db_sesija)
     database.flush()  # get the ID before creating links
@@ -2210,6 +2237,13 @@ async def create_sesija(
                 sesija_id=db_sesija.id
             )
             database.add(new_sk)
+            # Whoever actually books this session is that client's therapist,
+            # if the client doesn't already have one assigned.
+            if member and klijent.therapist_id is None:
+                klijent.therapist_id = member.id
+            database.flush()
+            if effective_is_free is None:
+                _recompute_client_free_sessions(database, klijent.id)
 
     # Create grupa link
     elif sesija_data.grupa_id:
@@ -2668,16 +2702,19 @@ def get_klijent(
 
 @app.post("/klijent/", tags=["Klijent"])
 def create_klijent(
+    request: Request,
     klijent_data: KlijentCreate,
     tenant_id: int = Depends(require_active_subscription),
     database: Session = Depends(get_db)
 ):
+    member = get_current_member_soft(request, tenant_id, database)
     db_klijent = Klijent(
         tenant_id=tenant_id,
         ime=klijent_data.ime,
         prezime=klijent_data.prezime,
         email=klijent_data.email,
-        broj_telefona=klijent_data.broj_telefona
+        broj_telefona=klijent_data.broj_telefona,
+        therapist_id=member.id if member else None,
     )
     database.add(db_klijent)
     database.commit()

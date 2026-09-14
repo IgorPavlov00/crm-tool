@@ -70,6 +70,7 @@ const statusColors: Record<
 > = {
   zakazano: { bg: "#dbeafe", border: "#3b82f6", text: "#1e40af" },
   zavrseno: { bg: "#dcfce7", border: "#22c55e", text: "#166534" },
+  besplatno: { bg: "#eef2ff", border: "#6366f1", text: "#4338ca" },
   otkazano: { bg: "#fee2e2", border: "#ef4444", text: "#991b1b" },
   default: { bg: "#f3e8ff", border: "#a855f7", text: "#6b21a8" },
 };
@@ -82,6 +83,7 @@ const Calendar: React.FC = () => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -139,7 +141,9 @@ const Calendar: React.FC = () => {
   };
 
   useEffect(() => {
-    Promise.all([fetchSessions(), fetchClients(), fetchGroups()]);
+    Promise.all([fetchSessions(), fetchClients(), fetchGroups()]).finally(() =>
+      setInitialLoading(false),
+    );
   }, []);
 
   // Get display name for a session — uses the data already in the session object
@@ -319,6 +323,31 @@ const Calendar: React.FC = () => {
   };
 
   const today = new Date();
+
+  if (initialLoading) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: "60vh",
+          gap: 14,
+          color: "#64748b",
+          fontSize: 13,
+        }}
+      >
+        <svg width="36" height="36" viewBox="0 0 44 44">
+          <circle cx="22" cy="22" r="18" fill="none" stroke="#e2e8f0" strokeWidth="3.5" />
+          <circle cx="22" cy="22" r="18" fill="none" stroke="#6366f1" strokeWidth="3.5" strokeDasharray="80 33" strokeLinecap="round">
+            <animateTransform attributeName="transform" type="rotate" from="0 22 22" to="360 22 22" dur="0.7s" repeatCount="indefinite" />
+          </circle>
+        </svg>
+        Učitavanje kalendara…
+      </div>
+    );
+  }
 
   return (
     <div className="cal-container">
@@ -701,6 +730,7 @@ const Calendar: React.FC = () => {
                   >
                     <option value="zakazano">Zakazano</option>
                     <option value="zavrseno">Završeno</option>
+                    <option value="besplatno">Besplatno</option>
                     <option value="otkazano">Otkazano</option>
                   </select>
                 </div>

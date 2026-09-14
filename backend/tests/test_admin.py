@@ -608,3 +608,47 @@ def test_invalid_attendance_status_rejected(seeded):
         headers=auth_headers("owner-sub"),
     )
     assert resp.status_code == 400
+
+
+# --------------------------------------------------------------------------
+# Regular (non-admin) booking flow now attributes to the logged-in member
+# --------------------------------------------------------------------------
+
+def test_regular_client_and_session_creation_attributes_to_logged_in_member(seeded):
+    """A therapist booking through the normal (non-admin) Calendar flow
+    should show up as that client's assigned therapist in the admin area -
+    this used to stay 'Nedodeljen' forever since the regular endpoints
+    never recorded who created anything."""
+    headers = {**auth_headers("member-sub"), "X-Tenant-ID": str(seeded["tenant_id"])}
+
+    client_resp = client.post("/klijent/", json={"ime": "Regular", "prezime": "Client"}, headers=headers)
+    assert client_resp.status_code == 200
+    new_client_id = client_resp.json()["id"]
+    assert client_resp.json()["therapist_id"] == seeded["member_id"]
+
+    session_resp = client.post(
+        "/sesija/",
+        json={
+            "cena": 0, "status": "besplatno",
+            "pocetak": "2025-09-01T10:00:00", "kraj": "2025-09-01T11:00:00",
+            "klijent_id": new_client_id,
+        },
+        headers=headers,
+    )
+    assert session_resp.status_code == 200
+    assert session_resp.json()["therapist_id"] == seeded["member_id"]
+    assert session_resp.json()["is_free"] is True
+
+    # cleanup so shared fixture totals stay stable for other tests
+    client.delete(f"/sesija/{session_resp.json()['id']}/", headers=headers)
+    client.delete(f"/klijent/{new_client_id}/", headers=headers)
+
+
+def test_regular_creation_without_token_leaves_therapist_unassigned(seeded):
+    """No Authorization header at all (e.g. an older cached frontend
+    build) must keep working exactly as before - just without attribution."""
+    headers = {"X-Tenant-ID": str(seeded["tenant_id"])}
+    resp = client.post("/klijent/", json={"ime": "Anon", "prezime": "Client"}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["therapist_id"] is None
+    client.delete(f"/klijent/{resp.json()['id']}/", headers=headers)
