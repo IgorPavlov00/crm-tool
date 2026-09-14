@@ -13,6 +13,7 @@ import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams } from "./dateRange";
 import { backendBase } from "./adminApi";
 import AnimatedNumber from "./AnimatedNumber";
+import { useTheme } from "./ThemeContext";
 import "./AdminDashboard.css";
 
 interface NamedCount {
@@ -62,6 +63,38 @@ const ChartEmptyIcon: React.FC = () => (
     <line x1="2" y1="20" x2="22" y2="20" />
   </svg>
 );
+
+const ClientsIcon: React.FC = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+
+const TherapistsIcon: React.FC = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4.8 4.8c-2 2-2 5.3 0 7.4l7.2 7.2 7.2-7.2c2-2 2-5.3 0-7.4-2-2-5.3-2-7.2 1-1.9-3-5.2-3-7.2-1Z" />
+  </svg>
+);
+
+const SessionsIcon: React.FC = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="18" height="18" rx="3" />
+    <path d="M3 10h18M8 2v4M16 2v4" />
+  </svg>
+);
+
+const PaidIcon: React.FC = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="6" width="20" height="13" rx="2" />
+    <path d="M2 10h20" />
+    <path d="M6 15h4" />
+  </svg>
+);
+
+const AVATAR_COLORS = ["#5157e8", "#e2447e", "#189b63", "#c07a06"];
 
 function findDuplicateTherapistNames(data: DashboardData): string[] {
   const byId = new Map<number, string>();
@@ -210,31 +243,46 @@ const KpiCards: React.FC<{ data: DashboardData }> = ({ data }) => {
       label: "Klijenti",
       value: cards.total_clients,
       sub: `${cards.active_clients} aktivnih · ${cards.completed_clients} završenih`,
+      icon: <ClientsIcon />,
+      n: 1,
     },
     {
       key: "therapists",
       label: "Terapeuti",
       value: cards.total_therapists,
       sub: `${therapistsSub} · ${therapistsWithSessions} sa sesijama`,
+      icon: <TherapistsIcon />,
+      n: 2,
     },
     {
       key: "sessions",
       label: "Sesije",
       value: cards.total_sessions,
       sub: `${sessionsPerClient.toFixed(1)} po klijentu`,
+      icon: <SessionsIcon />,
+      n: 3,
     },
     {
       key: "paid",
       label: "Naplaćene sesije",
       value: cards.paid_sessions,
       sub: `${paidPct}% od ukupnih`,
+      icon: <PaidIcon />,
+      n: 4,
     },
   ];
 
   return (
     <div className="dash-cards">
       {kpis.map((k) => (
-        <div className="dash-kpi" key={k.key}>
+        <div
+          className="dash-kpi"
+          key={k.key}
+          style={{ "--kpi-icon-bg": `var(--kpi-${k.n}-bg)`, "--kpi-icon-fg": `var(--kpi-${k.n}-fg)` } as React.CSSProperties}
+        >
+          <div className="dash-kpi-top">
+            <div className="dash-kpi-icon">{k.icon}</div>
+          </div>
           <div className="dash-kpi-label">{k.label}</div>
           <div className="dash-kpi-value">
             <AnimatedNumber value={k.value} />
@@ -246,6 +294,13 @@ const KpiCards: React.FC<{ data: DashboardData }> = ({ data }) => {
   );
 };
 
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 const LeaderboardRows: React.FC<{ rows: { rank: number; name: string; count: number }[] }> = ({ rows }) => {
   if (rows.length === 0) {
     return <div className="dash-empty">Nema podataka za izabrani period.</div>;
@@ -253,8 +308,11 @@ const LeaderboardRows: React.FC<{ rows: { rank: number; name: string; count: num
   const max = Math.max(...rows.map((r) => r.count), 1);
   return (
     <div>
-      {rows.map((r) => (
+      {rows.map((r, i) => (
         <div className="dash-lb-row" key={r.rank + r.name}>
+          <span className="dash-lb-avatar" style={{ background: AVATAR_COLORS[i % AVATAR_COLORS.length] }}>
+            {initialsOf(r.name)}
+          </span>
           <span className="dash-lb-rank">{r.rank}.</span>
           <span className="dash-lb-name">{r.name}</span>
           <span className="dash-lb-track">
@@ -268,9 +326,9 @@ const LeaderboardRows: React.FC<{ rows: { rank: number; name: string; count: num
 };
 
 const GENDER_SEGMENTS: { key: "female" | "male" | "unknown"; label: string; color: string }[] = [
-  { key: "female", label: "Žensko", color: "var(--dash-female)" },
-  { key: "male", label: "Muško", color: "var(--dash-accent)" },
-  { key: "unknown", label: "Nepoznato", color: "var(--dash-unknown)" },
+  { key: "female", label: "Žensko", color: "var(--gender-female)" },
+  { key: "male", label: "Muško", color: "var(--accent)" },
+  { key: "unknown", label: "Nepoznato", color: "var(--gender-unknown)" },
 ];
 
 const GenderStackedBar: React.FC<{ cards: DashboardData["cards"] }> = ({ cards }) => {
@@ -333,6 +391,14 @@ const SessionsPerTherapistBars: React.FC<{ rows: NamedCount[] }> = ({ rows }) =>
 };
 
 const MonthlySessionsChart: React.FC<{ monthly: { month: string; count: number }[] }> = ({ monthly }) => {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
+  const axisColor = isDark ? "#5c637a" : "#94a3b8";
+  const gridColor = isDark ? "#1f232e" : "#eceef2";
+  const lineColor = isDark ? "#8b8cf9" : "#5b4fd6";
+  const tooltipBg = isDark ? "#171a23" : "#ffffff";
+  const tooltipText = isDark ? "#f3f4f8" : "#181b25";
+
   if (monthly.length < 2) {
     return (
       <div className="dash-chart-empty">
@@ -351,11 +417,14 @@ const MonthlySessionsChart: React.FC<{ monthly: { month: string; count: number }
   return (
     <ResponsiveContainer width="100%" height={220}>
       <LineChart data={monthly}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e5e9" vertical={false} />
-        <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#8a94a1" axisLine={false} tickLine={false} />
-        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="#8a94a1" axisLine={false} tickLine={false} />
-        <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid #e2e5e9", fontSize: 12.5 }} />
-        <Line type="monotone" dataKey="count" stroke="#2a78d6" strokeWidth={2} dot={{ r: 3, fill: "#2a78d6", strokeWidth: 0 }} activeDot={{ r: 5 }} name="Sesije" />
+        <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+        <XAxis dataKey="month" tick={{ fontSize: 11, fill: axisColor }} stroke={axisColor} axisLine={false} tickLine={false} />
+        <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: axisColor }} stroke={axisColor} axisLine={false} tickLine={false} />
+        <Tooltip
+          contentStyle={{ borderRadius: 8, border: `1px solid ${gridColor}`, fontSize: 12.5, background: tooltipBg, color: tooltipText }}
+          labelStyle={{ color: tooltipText }}
+        />
+        <Line type="monotone" dataKey="count" stroke={lineColor} strokeWidth={2} dot={{ r: 3, fill: lineColor, strokeWidth: 0 }} activeDot={{ r: 5 }} name="Sesije" />
       </LineChart>
     </ResponsiveContainer>
   );

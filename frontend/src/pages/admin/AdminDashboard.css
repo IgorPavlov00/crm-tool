@@ -1,62 +1,22 @@
-/* Scoped redesign for the "Pregled centra" admin dashboard.
-   Deliberately independent of the shared .mhc-card/.mhc-panel system
-   (used by Clients/Therapists/Sessions/Reports) so this calmer, flatter
-   visual language doesn't leak into pages that weren't part of this pass. */
+/* Dashboard-specific layout. Colors come from the shared theme tokens
+   defined on .mhc-shell (see AdminArea.css) so this page follows the
+   same light/dark toggle as the rest of the admin center. */
 
 .dash-root {
-  --dash-accent: #2a78d6;
-  --dash-female: #e87ba4;
-  --dash-unknown: #c3c2b7;
-
-  --dash-text-primary: #1e293b;
-  --dash-text-secondary: #55606e;
-  --dash-text-muted: #8a94a1;
-
-  --dash-surface-1: #f2f3f5;
-  --dash-panel-bg: #ffffff;
-  --dash-border: #e2e5e9;
-  --dash-track: #e9ebef;
-
-  --dash-warning-bg: #fdf6e3;
-  --dash-warning-border: #f0dca0;
-  --dash-warning-text: #7a5b00;
-
-  color: var(--dash-text-primary);
+  color: var(--text-primary);
   font-weight: 400;
-}
-
-/* The rest of this app doesn't have a dark theme yet, so dark values
-   are wired up as variables (ready for a future `data-theme="dark"`
-   toggle on a page-level ancestor) rather than auto-switching on the
-   OS's prefers-color-scheme - doing that here would flip only this
-   page's cards/panels dark while the surrounding shell stays light. */
-[data-theme="dark"] .dash-root {
-  --dash-text-primary: #f1f3f5;
-  --dash-text-secondary: #b7bec7;
-  --dash-text-muted: #7d8894;
-
-  --dash-surface-1: #1c2027;
-  --dash-panel-bg: #15181d;
-  --dash-border: rgba(255, 255, 255, 0.09);
-  --dash-track: rgba(255, 255, 255, 0.09);
-
-  --dash-warning-bg: rgba(250, 204, 21, 0.1);
-  --dash-warning-border: rgba(250, 204, 21, 0.3);
-  --dash-warning-text: #f5cd52;
 }
 
 .dash-root * {
   box-sizing: border-box;
 }
 
-/* Keep the shared page header but bring its weight in line with the
-   calmer type system used below it on this page. */
-.dash-root .mhc-page-title {
-  font-weight: 500;
-}
-
 .dash-root .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+.dash-root .mhc-page-title {
+  font-weight: 500;
 }
 
 /* Warning banner */
@@ -64,9 +24,9 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  background: var(--dash-warning-bg);
-  border: 0.5px solid var(--dash-warning-border);
-  color: var(--dash-warning-text);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  color: var(--warning-text);
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 13px;
@@ -88,39 +48,71 @@
 /* KPI cards */
 .dash-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
   margin-bottom: 20px;
   min-width: 0;
 }
 
 .dash-kpi {
-  background: var(--dash-surface-1);
-  border-radius: 8px;
-  padding: 14px 16px;
+  background: var(--surface-card-tint);
+  border: 1px solid var(--border-tint);
+  border-radius: 16px;
+  padding: 16px 18px 15px;
   min-width: 0;
+}
+
+.dash-kpi-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.dash-kpi-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--kpi-icon-bg);
+  color: var(--kpi-icon-fg);
+}
+
+.dash-kpi-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mhc-shell[data-theme="dark"] .dash-kpi-top {
+  display: none;
 }
 
 .dash-kpi-label {
   font-size: 13px;
   font-weight: 400;
-  color: var(--dash-text-secondary);
+  color: var(--text-secondary);
   margin: 0 0 6px;
 }
 
 .dash-kpi-value {
-  font-size: 32px;
+  font-size: 30px;
   font-weight: 500;
-  color: var(--dash-text-primary);
+  color: var(--text-primary);
   line-height: 1.15;
   font-variant-numeric: tabular-nums;
+}
+
+.mhc-shell[data-theme="dark"] .dash-kpi-value {
+  text-shadow: 0 0 22px rgba(139, 140, 249, 0.35);
 }
 
 .dash-kpi-sub {
   font-size: 12px;
   font-weight: 400;
-  color: var(--dash-text-muted);
-  margin-top: 4px;
+  color: var(--text-muted);
+  margin-top: 5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -161,9 +153,9 @@
 }
 
 .dash-panel {
-  background: var(--dash-panel-bg);
-  border: 0.5px solid var(--dash-border);
-  border-radius: 12px;
+  background: var(--surface-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
   padding: 1rem 1.25rem;
   min-width: 0;
 }
@@ -173,19 +165,21 @@
 }
 
 .dash-panel-title {
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 500;
-  color: var(--dash-text-primary);
+  color: var(--text-primary);
   margin: 0 0 12px;
 }
 
 .dash-empty {
   font-size: 13px;
-  color: var(--dash-text-muted);
+  color: var(--text-muted);
   padding: 20px 4px;
 }
 
-/* Component 1: leaderboard rows with a proportional bar */
+/* Component 1: leaderboard rows. Light mode shows a colored avatar
+   chip with initials; dark mode swaps it for a plain rank number -
+   matching the two approved directions exactly. */
 .dash-lb-row {
   display: flex;
   align-items: center;
@@ -193,19 +187,42 @@
   padding: 6px 0;
 }
 
+.dash-lb-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-family: var(--font-display), Georgia, serif;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mhc-shell[data-theme="dark"] .dash-lb-avatar {
+  display: none;
+}
+
 .dash-lb-rank {
+  display: none;
   width: 18px;
   flex-shrink: 0;
   font-size: 12px;
-  color: var(--dash-text-muted);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.mhc-shell[data-theme="dark"] .dash-lb-rank {
+  display: block;
 }
 
 .dash-lb-name {
   width: 120px;
   flex-shrink: 0;
   font-size: 13px;
-  color: var(--dash-text-primary);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -214,16 +231,21 @@
 .dash-lb-track {
   flex: 1;
   min-width: 0;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--dash-track);
+  height: 7px;
+  border-radius: 4px;
+  background: var(--track);
   overflow: hidden;
 }
 
 .dash-lb-fill {
   height: 100%;
-  border-radius: 3px;
-  background: var(--dash-accent);
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+}
+
+.mhc-shell[data-theme="dark"] .dash-lb-fill {
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(139, 140, 249, 0.6);
 }
 
 .dash-lb-count {
@@ -231,7 +253,7 @@
   flex-shrink: 0;
   text-align: right;
   font-size: 13px;
-  color: var(--dash-text-secondary);
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -247,6 +269,7 @@
 
 .dash-stack-seg {
   height: 100%;
+  min-width: 0;
 }
 
 .dash-legend {
@@ -260,7 +283,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12.5px;
-  color: var(--dash-text-secondary);
+  color: var(--text-secondary);
 }
 
 .dash-legend-dot {
@@ -271,7 +294,7 @@
 }
 
 .dash-legend-value {
-  color: var(--dash-text-primary);
+  color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -291,7 +314,7 @@
   width: 130px;
   flex-shrink: 0;
   font-size: 13px;
-  color: var(--dash-text-primary);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -301,7 +324,7 @@
   flex: 1;
   min-width: 0;
   height: 20px;
-  background: var(--dash-track);
+  background: var(--track);
   border-radius: 0 4px 4px 0;
   overflow: hidden;
   display: flex;
@@ -310,8 +333,13 @@
 
 .dash-bar-fill {
   height: 100%;
-  background: var(--dash-accent);
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
   border-radius: 0 4px 4px 0;
+}
+
+.mhc-shell[data-theme="dark"] .dash-bar-fill {
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(139, 140, 249, 0.6);
 }
 
 .dash-bar-value {
@@ -319,7 +347,7 @@
   flex-shrink: 0;
   text-align: right;
   font-size: 13px;
-  color: var(--dash-text-secondary);
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -332,19 +360,19 @@
   gap: 8px;
   padding: 40px 16px;
   text-align: center;
-  color: var(--dash-text-muted);
+  color: var(--text-muted);
 }
 
 .dash-chart-empty svg {
-  color: var(--dash-text-muted);
+  color: var(--text-muted);
 }
 
 .dash-chart-empty-title {
   font-size: 13px;
-  color: var(--dash-text-secondary);
+  color: var(--text-secondary);
 }
 
 .dash-chart-empty-sub {
   font-size: 12px;
-  color: var(--dash-text-muted);
+  color: var(--text-muted);
 }
