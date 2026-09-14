@@ -1,0 +1,341 @@
+/* Scoped redesign for the "Pregled centra" admin dashboard.
+   Deliberately independent of the shared .mhc-card/.mhc-panel system
+   (used by Clients/Therapists/Sessions/Reports) so this calmer, flatter
+   visual language doesn't leak into pages that weren't part of this pass. */
+
+.dash-root {
+  --dash-accent: #2a78d6;
+  --dash-female: #e87ba4;
+  --dash-unknown: #c3c2b7;
+
+  --dash-text-primary: #1e293b;
+  --dash-text-secondary: #55606e;
+  --dash-text-muted: #8a94a1;
+
+  --dash-surface-1: #f2f3f5;
+  --dash-panel-bg: #ffffff;
+  --dash-border: #e2e5e9;
+  --dash-track: #e9ebef;
+
+  --dash-warning-bg: #fdf6e3;
+  --dash-warning-border: #f0dca0;
+  --dash-warning-text: #7a5b00;
+
+  color: var(--dash-text-primary);
+  font-weight: 400;
+}
+
+@media (prefers-color-scheme: dark) {
+  .dash-root {
+    --dash-text-primary: #f1f3f5;
+    --dash-text-secondary: #b7bec7;
+    --dash-text-muted: #7d8894;
+
+    --dash-surface-1: #1c2027;
+    --dash-panel-bg: #15181d;
+    --dash-border: rgba(255, 255, 255, 0.09);
+    --dash-track: rgba(255, 255, 255, 0.09);
+
+    --dash-warning-bg: rgba(250, 204, 21, 0.1);
+    --dash-warning-border: rgba(250, 204, 21, 0.3);
+    --dash-warning-text: #f5cd52;
+  }
+}
+
+.dash-root * {
+  box-sizing: border-box;
+}
+
+.dash-root .tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Warning banner */
+.dash-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--dash-warning-bg);
+  border: 0.5px solid var(--dash-warning-border);
+  color: var(--dash-warning-text);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.dash-warning svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.dash-warning-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* KPI cards */
+.dash-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+  min-width: 0;
+}
+
+.dash-kpi {
+  background: var(--dash-surface-1);
+  border-radius: 8px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.dash-kpi-label {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--dash-text-secondary);
+  margin: 0 0 6px;
+}
+
+.dash-kpi-value {
+  font-size: 32px;
+  font-weight: 500;
+  color: var(--dash-text-primary);
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-kpi-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--dash-text-muted);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 900px) {
+  .dash-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .dash-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Panels */
+.dash-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.dash-panel-col {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .dash-panel-row {
+    flex-direction: column;
+  }
+  .dash-panel-col {
+    flex: 1 1 auto;
+  }
+}
+
+.dash-panel {
+  background: var(--dash-panel-bg);
+  border: 0.5px solid var(--dash-border);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  min-width: 0;
+}
+
+.dash-panel + .dash-panel {
+  margin-top: 16px;
+}
+
+.dash-panel-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--dash-text-primary);
+  margin: 0 0 12px;
+}
+
+.dash-empty {
+  font-size: 13px;
+  color: var(--dash-text-muted);
+  padding: 20px 4px;
+}
+
+/* Component 1: leaderboard rows with a proportional bar */
+.dash-lb-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.dash-lb-rank {
+  width: 18px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--dash-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-lb-name {
+  width: 120px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--dash-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-lb-track {
+  flex: 1;
+  min-width: 0;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--dash-track);
+  overflow: hidden;
+}
+
+.dash-lb-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--dash-accent);
+}
+
+.dash-lb-count {
+  width: 30px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 13px;
+  color: var(--dash-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Component 2: gender stacked bar + legend */
+.dash-stack-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+.dash-stack-seg {
+  height: 100%;
+}
+
+.dash-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.dash-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--dash-text-secondary);
+}
+
+.dash-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.dash-legend-value {
+  color: var(--dash-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Component 3: sessions-per-therapist bars */
+.dash-bars-block {
+  max-width: 640px;
+}
+
+.dash-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+}
+
+.dash-bar-name {
+  width: 130px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--dash-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-bar-track {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  background: var(--dash-track);
+  border-radius: 0 4px 4px 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+.dash-bar-fill {
+  height: 100%;
+  background: var(--dash-accent);
+  border-radius: 0 4px 4px 0;
+}
+
+.dash-bar-value {
+  width: 34px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 13px;
+  color: var(--dash-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Component 4: monthly sessions empty state */
+.dash-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--dash-text-muted);
+}
+
+.dash-chart-empty svg {
+  color: var(--dash-text-muted);
+}
+
+.dash-chart-empty-title {
+  font-size: 13px;
+  color: var(--dash-text-secondary);
+}
+
+.dash-chart-empty-sub {
+  font-size: 12px;
+  color: var(--dash-text-muted);
+}
