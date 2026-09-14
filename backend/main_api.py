@@ -3133,6 +3133,125 @@ def public_therapist_availability(
     }
 
 
+############################################
+#
+#   Public support-request intake (current flow)
+#
+#   Per product decision, the public "Find a Therapist" page no longer
+#   matches/lists therapists or lets a client pick a specific slot - it
+#   just collects what's troubling them (categories + a free-text
+#   description) plus contact info, and an admin manually assigns a
+#   therapist afterward. Everything below public_search_therapists is the
+#   PREVIOUS therapist-matching/self-booking flow, kept but no longer
+#   wired to the frontend (see the comment near public_book_session).
+#
+############################################
+
+PUBLIC_INTAKE_TENANT_NAME = "Javni zahtevi (sajt)"
+
+
+def _get_or_create_public_intake_tenant(db: Session) -> "Tenant":
+    """A single dedicated tenant that public website requests are filed
+    under. There's no specific practice/therapist chosen by the client
+    anymore (an admin assigns one manually afterward), so these records
+    need somewhere to live that isn't tied to any real practice. The
+    admin area reads across every tenant regardless, so which tenant
+    this is doesn't affect what an admin sees."""
+    tenant = db.query(Tenant).filter(Tenant.name == PUBLIC_INTAKE_TENANT_NAME).first()
+    if not tenant:
+        tenant = Tenant(
+            name=PUBLIC_INTAKE_TENANT_NAME,
+            trial_ends_at=datetime.utcnow() + timedelta(days=36500),
+        )
+        db.add(tenant)
+        db.flush()
+    return tenant
+
+
+class PublicIntakeRequest(BaseModel):
+    ime: str
+    prezime: str
+    email: str
+    telefon: str | None = None
+    tags: list[str] = []  # human-readable category labels, not slugs
+    opis: str | None = None
+
+
+def send_public_support_request_email(klijent: "Klijent", data: "PublicIntakeRequest"):
+    """Notifies the center admin of a new support request so they can
+    review it and assign the client to the appropriate therapist - a
+    failure here must never block the client's submission, hence the
+    wrapped try/except."""
+    tags_label = ", ".join(data.tags) if data.tags else "—"
+    opis_row = (
+        f'<div style="font-size:14px;color:#555;margin-top:12px;"><strong>Opis situacije:</strong> {data.opis}</div>'
+        if data.opis else ""
+    )
+    html = f"""
+<div style="background:#f2f2f7;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;color:#1a1a1a;">
+<div style="max-width:520px;margin:auto;">
+<div style="background:#fff;border-radius:16px;padding:28px 24px 24px;margin-bottom:8px;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+<div style="font-size:22px;margin-bottom:8px;">📩 Novi zahtev za podršku</div>
+<div style="font-size:15px;color:#1a1a1a;">Klijent je preko sajta poslao zahtev. Dodelite terapeuta ručno u Admin centru (Klijenti).</div>
+</div>
+<div style="background:#fff;border-radius:16px;padding:24px;margin-bottom:8px;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+<div style="border:1.5px dashed #d1d5db;border-radius:12px;padding:20px;">
+<div style="font-size:15px;font-weight:600;color:#111;margin-bottom:6px;">{klijent.ime} {klijent.prezime}</div>
+<div style="font-size:14px;color:#555;">{klijent.email}{" · " + klijent.broj_telefona if klijent.broj_telefona else ""}</div>
+<div style="font-size:14px;color:#555;margin-top:10px;">🏷️ Oblasti: {tags_label}</div>
+{opis_row}
+</div>
+</div>
+<div style="text-align:center;font-size:13px;color:#9ca3af;margin-top:14px;line-height:1.5;">
+<strong style="color:#6b7280;">PsihoApp</strong>
+</div>
+</div>
+</div>
+"""
+    try:
+        resend.Emails.send({
+            "from": "PsihoApp <noreply@hrioapp.com>",
+            "to": [PUBLIC_INTAKE_NOTIFY_EMAIL],
+            "subject": f"📩 Novi zahtev za podršku - {klijent.ime} {klijent.prezime}",
+            "html": html,
+        })
+    except Exception as e:
+        logger.error(f"Failed to send public support-request email: {e}")
+
+
+@app.post("/public/intake-request", tags=["Public"])
+def public_intake_request(
+        data: PublicIntakeRequest,
+        database: Session = Depends(get_db),
+):
+    if not data.ime.strip() or not data.prezime.strip() or not data.email.strip():
+        raise HTTPException(status_code=400, detail="Ime, prezime i email su obavezni")
+    if not data.tags and not (data.opis and data.opis.strip()):
+        raise HTTPException(status_code=400, detail="Izaberite bar jednu oblast ili opišite situaciju")
+
+    tenant = _get_or_create_public_intake_tenant(database)
+
+    klijent = database.query(Klijent).filter(
+        Klijent.tenant_id == tenant.id, Klijent.email == data.email
+    ).first()
+    if not klijent:
+        klijent = Klijent(
+            tenant_id=tenant.id,
+            ime=data.ime.strip(),
+            prezime=data.prezime.strip(),
+            email=data.email,
+            broj_telefona=data.telefon or "",
+        )
+        database.add(klijent)
+
+    database.commit()
+    database.refresh(klijent)
+
+    send_public_support_request_email(klijent, data)
+
+    return {"klijent_ime": f"{klijent.ime} {klijent.prezime}"}
+
+
 class PublicBookingRequest(BaseModel):
     ime: str
     prezime: str
