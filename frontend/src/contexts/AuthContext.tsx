@@ -20,6 +20,9 @@ interface UserProfile {
   // a practicing psychotherapist; is_admin is the only gate for the
   // admin area (see require_admin on the backend).
   is_admin: boolean;
+  // New registrations (self-registered or joined via invite) start
+  // unapproved and can't use the app until an admin approves them.
+  is_approved: boolean;
   tenant_id: number;
   tenant_name: string;
 }
@@ -124,6 +127,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  // A pending (not-yet-approved) account never gets a tenant header
+  // applied, so it can't actually call any tenant-scoped endpoint even
+  // though its Supabase login itself succeeded - the app then shows a
+  // "waiting for approval" screen instead of the normal app for it.
+  const applyTenantIfApproved = (profile: UserProfile) => {
+    applyTenantToAxios(profile.is_approved ? profile.tenant_id : null);
+  };
+
   // The admin area verifies this bearer token server-side (see require_admin
   // in main_api.py) instead of trusting a client-supplied header, so it must
   // be kept in sync with the current Supabase session on every change,
@@ -153,7 +164,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           });
 
           const joinedProfile: UserProfile = res.data;
-          applyTenantToAxios(joinedProfile.tenant_id);
+          applyTenantIfApproved(joinedProfile);
           clearInvite();
 
           return joinedProfile;
@@ -173,7 +184,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         });
 
         const fetchedProfile: UserProfile = res.data;
-        applyTenantToAxios(fetchedProfile.tenant_id);
+        applyTenantIfApproved(fetchedProfile);
 
         return fetchedProfile;
       } catch (err: any) {
@@ -311,7 +322,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         fullName,
         practiceName,
       );
-      applyTenantToAxios(createdProfile.tenant_id);
+      applyTenantIfApproved(createdProfile);
       setProfile(createdProfile);
 
       return {};
@@ -392,7 +403,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         fullName || user.user_metadata?.full_name || user.email || "",
         practiceName,
       );
-      applyTenantToAxios(createdProfile.tenant_id);
+      applyTenantIfApproved(createdProfile);
       setProfile(createdProfile);
 
       return {};

@@ -75,6 +75,13 @@ class UserProfile(Base):
     # joining via an invite link (join_tenant never sets this True).
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # New registrations (self-registered or joined via invite) start
+    # unapproved and can't use the app until an admin approves them - see
+    # require_approved_profile/POST .../approve in main_api.py. Existing
+    # rows are grandfathered to True by a one-time backfill migration so
+    # nobody already using the app gets locked out.
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+
     tenant = relationship("Tenant", back_populates="user_profiles")
 
 

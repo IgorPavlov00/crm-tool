@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams, rangeLabel } from "./dateRange";
-import { backendBase, GENDER_LABELS } from "./adminApi";
+import { backendBase, GENDER_LABELS, cardMeta } from "./adminApi";
 
 interface ReportData {
   period: { start_date: string | null; end_date: string | null };
@@ -85,17 +85,33 @@ const AdminReports: React.FC = () => {
         <div className="mhc-loading">Učitavanje…</div>
       ) : data ? (
         <div id="mhc-report-print">
-          <h2 style={{ fontFamily: "var(--font-display), Georgia, serif", color: "#0f172a" }}>
-            Statistika centra — {rangeLabel(range)}
-          </h2>
+          <div className="mhc-report-header">
+            <div>
+              <h2 className="mhc-report-title">Statistika centra</h2>
+              <p className="mhc-report-period">{rangeLabel(range)}</p>
+            </div>
+            <div className="mhc-report-generated">
+              Generisano: {new Date().toLocaleString("sr-Latn-RS", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </div>
+          </div>
 
           <div className="mhc-cards-grid">
-            {Object.entries(CARD_LABELS).map(([key, label]) => (
-              <div className="mhc-card" key={key}>
-                <div className="mhc-card-label">{label}</div>
-                <div className="mhc-card-value">{data.cards[key] ?? 0}</div>
-              </div>
-            ))}
+            {Object.entries(CARD_LABELS).map(([key, label]) => {
+              const meta = cardMeta(key);
+              return (
+                <div
+                  className="mhc-card"
+                  key={key}
+                  style={{ "--card-accent": meta.color, "--icon-bg": meta.bg, "--icon-color": meta.color } as React.CSSProperties}
+                >
+                  <div className="mhc-card-top">
+                    <div className="mhc-card-icon">{meta.icon}</div>
+                  </div>
+                  <div className="mhc-card-label">{label}</div>
+                  <div className="mhc-card-value">{data.cards[key] ?? 0}</div>
+                </div>
+              );
+            })}
           </div>
 
           <div className="mhc-panel-row">
@@ -105,13 +121,15 @@ const AdminReports: React.FC = () => {
                 {data.full_clients_leaderboard.length === 0 ? (
                   <div className="mhc-empty">Nema podataka.</div>
                 ) : (
-                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13.5 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {data.full_clients_leaderboard.map((r) => (
-                      <li key={r.rank + r.name} style={{ marginBottom: 4 }}>
-                        {r.name} — {r.count}
-                      </li>
+                      <div key={r.rank + r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span className={`mhc-rank-badge${r.rank <= 3 ? ` mhc-rank-${r.rank}` : ""}`}>{r.rank}</span>
+                        <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: "#1e293b" }}>{r.name}</span>
+                        <span style={{ fontSize: 12.5, color: "#64748b" }}>{r.count} klijenata</span>
+                      </div>
                     ))}
-                  </ol>
+                  </div>
                 )}
               </div>
             </div>
@@ -121,13 +139,15 @@ const AdminReports: React.FC = () => {
                 {data.full_sessions_leaderboard.length === 0 ? (
                   <div className="mhc-empty">Nema podataka.</div>
                 ) : (
-                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13.5 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {data.full_sessions_leaderboard.map((r) => (
-                      <li key={r.rank + r.name} style={{ marginBottom: 4 }}>
-                        {r.name} — {r.count}
-                      </li>
+                      <div key={r.rank + r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span className={`mhc-rank-badge${r.rank <= 3 ? ` mhc-rank-${r.rank}` : ""}`}>{r.rank}</span>
+                        <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: "#1e293b" }}>{r.name}</span>
+                        <span style={{ fontSize: 12.5, color: "#64748b" }}>{r.count} sesija</span>
+                      </div>
                     ))}
-                  </ol>
+                  </div>
                 )}
               </div>
             </div>
@@ -161,9 +181,47 @@ const AdminReports: React.FC = () => {
       ) : null}
 
       <style>{`
+        .mhc-report-header {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 20px;
+          padding-bottom: 14px;
+          border-bottom: 2px solid #eef1f6;
+        }
+        .mhc-report-title {
+          font-family: var(--font-display), Georgia, serif;
+          color: #0f172a;
+          font-size: 22px;
+          font-weight: 700;
+          margin: 0 0 4px;
+        }
+        .mhc-report-period {
+          font-size: 13.5px;
+          color: #6366f1;
+          font-weight: 600;
+          margin: 0;
+        }
+        .mhc-report-generated {
+          font-size: 11.5px;
+          color: #94a3b8;
+        }
         @media print {
           .mhc-sidebar, .no-print { display: none !important; }
           .mhc-main { padding: 0 !important; }
+          .mhc-card, .mhc-panel {
+            box-shadow: none !important;
+            border: 1px solid #e2e8f0 !important;
+            break-inside: avoid;
+          }
+          .mhc-card:hover, .mhc-panel:hover {
+            transform: none !important;
+          }
+          .mhc-panel-row { break-inside: avoid; }
+          .mhc-report-header { break-after: avoid; }
+          @page { margin: 16mm 12mm; }
         }
       `}</style>
     </div>

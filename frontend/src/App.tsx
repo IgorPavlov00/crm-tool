@@ -13,6 +13,7 @@ import ClientAuthPage from "./pages/ClientAuthPage";
 import ClientDashboard from "./pages/ClientDashboard";
 import SubscriptionPaywall from "./pages/SubscriptionPaywall";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import PendingApprovalPage from "./pages/PendingApprovalPage";
 import AdminGate from "./pages/admin/AdminGate";
 import "./App.css";
 import "./pages/Auth.css";
@@ -143,6 +144,11 @@ const AppContent: React.FC = () => {
   // Not logged in — show auth page
   if (!user || !profile) {
     return <AuthPage />;
+  }
+
+  // Registered/joined but an admin hasn't approved this account yet.
+  if (!profile.is_approved) {
+    return <PendingApprovalPage email={profile.email} onSignOut={signOut} />;
   }
 
   // Still checking billing status

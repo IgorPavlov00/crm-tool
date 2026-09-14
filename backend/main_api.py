@@ -15,6 +15,7 @@ from pydantic_classes import *
 from sql_alchemy import *
 import io
 import csv
+import codecs
 import jwt
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -83,6 +84,7 @@ def run_light_migrations(engine):
         # Admin area (Mental Health Center management)
         "ALTER TABLE user_profile ADD COLUMN active BOOLEAN DEFAULT TRUE",
         "ALTER TABLE user_profile ADD COLUMN is_admin BOOLEAN",
+        "ALTER TABLE user_profile ADD COLUMN is_approved BOOLEAN",
         "ALTER TABLE klijent ADD COLUMN gender VARCHAR(20)",
         "ALTER TABLE klijent ADD COLUMN status VARCHAR(20)",
         "ALTER TABLE klijent ADD COLUMN therapist_id INTEGER",
@@ -128,6 +130,12 @@ def run_light_migrations(engine):
         backfill_statements = [
             "UPDATE user_profile SET active = TRUE WHERE active IS NULL",
             "UPDATE user_profile SET is_admin = FALSE WHERE is_admin IS NULL",
+            # Opposite direction from is_admin: existing accounts are already
+            # in active use, so they're grandfathered as approved. Only rows
+            # created after this migration default to False (pending) via
+            # the ORM column default - see register_profile/login_profile/
+            # join_tenant below, which never pass is_approved explicitly.
+            "UPDATE user_profile SET is_approved = TRUE WHERE is_approved IS NULL",
             "UPDATE klijent SET status = 'active' WHERE status IS NULL",
             "UPDATE klijent SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL",
             "UPDATE klijent SET updated_at = created_at WHERE updated_at IS NULL",
@@ -742,6 +750,9 @@ def require_admin(
     ).first()
     if not profile:
         raise HTTPException(status_code=401, detail="No profile for this account")
+
+    if not profile.is_approved:
+        raise HTTPException(status_code=403, detail="Account pending approval")
 
     if not profile.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -3650,6 +3661,7 @@ def register_profile(
             "full_name": existing.full_name,
             "role": existing.role,
             "is_admin": existing.is_admin,
+            "is_approved": existing.is_approved,
             "tenant_id": existing.tenant_id,
             "tenant_name": tenant.name if tenant else ""
         }
@@ -3683,6 +3695,7 @@ def register_profile(
         "full_name": new_profile.full_name,
         "role": new_profile.role,
         "is_admin": new_profile.is_admin,
+        "is_approved": new_profile.is_approved,
         "tenant_id": new_tenant.id,
         "tenant_name": new_tenant.name
     }
@@ -3724,6 +3737,7 @@ def login_profile(
         "full_name": profile.full_name,
         "role": profile.role,
         "is_admin": profile.is_admin,
+        "is_approved": profile.is_approved,
         "tenant_id": profile.tenant_id,
         "tenant_name": tenant.name if tenant else ""
     }
@@ -3750,6 +3764,7 @@ def join_tenant(
             "full_name": existing.full_name,
             "role": existing.role,
             "is_admin": existing.is_admin,
+            "is_approved": existing.is_approved,
             "tenant_id": existing.tenant_id,
             "tenant_name": tenant.name if tenant else ""
         }
@@ -3778,6 +3793,7 @@ def join_tenant(
         "full_name": new_profile.full_name,
         "role": new_profile.role,
         "is_admin": new_profile.is_admin,
+        "is_approved": new_profile.is_approved,
         "tenant_id": new_profile.tenant_id,
         "tenant_name": tenant.name
     }
@@ -4296,6 +4312,7 @@ def _therapist_stats_from(therapist: "UserProfile", clients_all, sessions_all, s
         "role": therapist.role,
         "active": therapist.active,
         "is_admin": therapist.is_admin,
+        "is_approved": therapist.is_approved,
         "total_clients": len(my_clients),
         "active_clients": len([c for c in my_clients if c.status == "active"]),
         "completed_clients": len([c for c in my_clients if c.status == "completed"]),
@@ -4517,6 +4534,66 @@ def admin_update_therapist(
         "role": therapist.role,
         "active": therapist.active,
         "is_admin": therapist.is_admin,
+        "is_approved": therapist.is_approved,
+    }
+
+
+def send_therapist_approved_email(therapist: "UserProfile"):
+    """Notifies a newly-approved therapist that their account is active -
+    a best-effort send; a failure here must never block the approval
+    action itself."""
+    name = therapist.full_name or therapist.email
+    html = f"""
+<div style="background:#f2f2f7;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;color:#1a1a1a;">
+<div style="max-width:520px;margin:auto;">
+<div style="background:#fff;border-radius:16px;padding:28px 24px 24px;margin-bottom:8px;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+<div style="font-size:22px;margin-bottom:8px;">✅ Nalog je odobren</div>
+<div style="font-size:15px;color:#1a1a1a;margin-bottom:4px;">Poštovani/a <strong>{name}</strong>,</div>
+<div style="font-size:15px;color:#1a1a1a;">Vaš nalog je odobren od strane administratora. Sada možete da se prijavite (email/lozinka ili Google).</div>
+</div>
+<div style="text-align:center;font-size:13px;color:#9ca3af;margin-top:14px;line-height:1.5;">
+<strong style="color:#6b7280;">PsihoApp</strong>
+</div>
+</div>
+</div>
+"""
+    try:
+        resend.Emails.send({
+            "from": "PsihoApp <noreply@hrioapp.com>",
+            "to": [therapist.email],
+            "subject": "✅ Vaš nalog je odobren",
+            "html": html,
+        })
+    except Exception as e:
+        logger.error(f"Failed to send approval email to {therapist.email}: {e}")
+
+
+@app.post("/admin/therapists/{user_id}/approve", tags=["Admin"])
+def admin_approve_therapist(
+        user_id: int,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    """Approves a pending registration so they can actually use the app -
+    see UserProfile.is_approved. Sends a notification email on success."""
+    therapist = database.query(UserProfile).filter(UserProfile.id == user_id).first()
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+
+    already_approved = therapist.is_approved
+    therapist.is_approved = True
+    _log_admin_action(database, admin, "THERAPIST_APPROVED", "therapist", therapist.id)
+    database.commit()
+    database.refresh(therapist)
+
+    if not already_approved:
+        send_therapist_approved_email(therapist)
+
+    return {
+        "user_id": therapist.id,
+        "full_name": therapist.full_name,
+        "email": therapist.email,
+        "is_approved": therapist.is_approved,
     }
 
 
@@ -5119,6 +5196,24 @@ def admin_report(
     }
 
 
+_REPORT_CARD_LABELS_SR = {
+    "total_therapists": "Ukupno terapeuta",
+    "active_therapists": "Aktivni terapeuti",
+    "total_clients": "Ukupno klijenata",
+    "active_clients": "Aktivni klijenti",
+    "completed_clients": "Završeni klijenti",
+    "archived_clients": "Arhivirani klijenti",
+    "total_sessions": "Ukupno sesija",
+    "free_sessions": "Besplatne sesije",
+    "paid_sessions": "Naplaćene sesije",
+    "female_clients": "Ženski klijenti",
+    "male_clients": "Muški klijenti",
+    "other_clients": "Ostalo/nepoznato",
+}
+
+_GENDER_LABELS_SR = {"female": "Žensko", "male": "Muško", "other": "Drugo", "unknown": "Nepoznato"}
+
+
 @app.get("/admin/reports/export.csv", tags=["Admin"])
 def admin_report_export_csv(
         start_date: Optional[date] = None,
@@ -5131,38 +5226,46 @@ def admin_report_export_csv(
     buf = io.StringIO()
     writer = csv.writer(buf)
     period_label = f"{report['period']['start_date'] or 'sve'} - {report['period']['end_date'] or 'sve'}"
-    writer.writerow([f"Statistika centra ({period_label})"])
-    writer.writerow([])
-    writer.writerow(["Metrika", "Vrednost"])
-    for key, value in report["cards"].items():
-        writer.writerow([key, value])
+    writer.writerow(["Statistika centra"])
+    writer.writerow(["Period", period_label])
+    writer.writerow(["Generisano", datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")])
 
     writer.writerow([])
-    writer.writerow(["Najviše klijenata"])
+    writer.writerow(["KLJUČNI POKAZATELJI"])
+    writer.writerow(["Metrika", "Vrednost"])
+    for key, value in report["cards"].items():
+        writer.writerow([_REPORT_CARD_LABELS_SR.get(key, key), value])
+
+    writer.writerow([])
+    writer.writerow(["NAJVIŠE KLIJENATA"])
     writer.writerow(["Mesto", "Terapeut", "Broj klijenata"])
     for row in report["full_clients_leaderboard"]:
         writer.writerow([row["rank"], row["name"], row["count"]])
 
     writer.writerow([])
-    writer.writerow(["Najviše sesija"])
+    writer.writerow(["NAJVIŠE SESIJA"])
     writer.writerow(["Mesto", "Terapeut", "Broj sesija"])
     for row in report["full_sessions_leaderboard"]:
         writer.writerow([row["rank"], row["name"], row["count"]])
 
     writer.writerow([])
-    writer.writerow(["Polna struktura"])
+    writer.writerow(["POLNA STRUKTURA KLIJENATA"])
+    writer.writerow(["Pol", "Broj klijenata"])
     for row in report["gender_breakdown"]:
-        writer.writerow([row["gender"], row["count"]])
+        writer.writerow([_GENDER_LABELS_SR.get(row["gender"], row["gender"]), row["count"]])
 
     writer.writerow([])
-    writer.writerow(["Timski sastanci održano", report["attendance_summary"]["meetings_held"]])
+    writer.writerow(["PRISUSTVO TIMU"])
+    writer.writerow(["Sastanaka održano", report["attendance_summary"]["meetings_held"]])
     writer.writerow(["Prisutan", report["attendance_summary"]["present"]])
     writer.writerow(["Odsutan", report["attendance_summary"]["absent"]])
     writer.writerow(["Opravdano odsutan", report["attendance_summary"]["excused"]])
 
     filename = f"izvestaj_{start_date or 'sve'}_{end_date or 'sve'}.csv"
+    # Prepend UTF-8 BOM so Excel correctly renders Serbian diacritics instead of mangling them.
+    csv_bytes = codecs.BOM_UTF8 + buf.getvalue().encode("utf-8")
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        iter([csv_bytes]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
