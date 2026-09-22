@@ -277,7 +277,23 @@ def format_time(dt):
     return dt.strftime("%H:%M")
 
 
-def send_session_email(action, client_name, pocetak, kraj, cena, client_email=None):
+def resolve_therapist_email(tenant_id, therapist_id, database) -> Optional[str]:
+    """Who the "session created/updated/deleted" notification copy should
+    go to: the session's assigned therapist, falling back to the tenant
+    owner if it has none assigned. Returns None if neither has an email on
+    file, so callers can skip that send instead of mailing a hardcoded
+    address."""
+    therapist = None
+    if therapist_id:
+        therapist = database.query(UserProfile).filter(UserProfile.id == therapist_id).first()
+    if not therapist:
+        therapist = database.query(UserProfile).filter(
+            UserProfile.tenant_id == tenant_id, UserProfile.role == "owner"
+        ).first()
+    return therapist.email if therapist else None
+
+
+def send_session_email(action, client_name, pocetak, kraj, cena, client_email=None, therapist_email=None):
 
     config = {
         "created": {
@@ -348,12 +364,13 @@ Hvala vam što ste odabrali <strong style="color:#6b7280;">PsihApp</strong>.
 </div>
 """
 
-    resend.Emails.send({
-        "from": "Hrio <noreply@hrioapp.com>",
-        "to": ["igorpavlov106@gmail.com"],
-        "subject": f"{c['icon']} {c['title']} - {client_name}",
-        "html": html
-    })
+    if therapist_email:
+        resend.Emails.send({
+            "from": "Hrio <noreply@hrioapp.com>",
+            "to": [therapist_email],
+            "subject": f"{c['icon']} {c['title']} - {client_name}",
+            "html": html
+        })
 
     if client_email:
         client_html = f"""
@@ -400,7 +417,7 @@ Hvala vam što ste odabrali <strong style="color:#6b7280;">PsihApp</strong>.
         })
 
 
-def send_session_email_to_group(action, grupa_naziv, pocetak, kraj, cena, client_emails):
+def send_session_email_to_group(action, grupa_naziv, pocetak, kraj, cena, client_emails, therapist_email=None):
     config = {
         "created": {
             "title": "Grupna sesija zakazana",
@@ -459,12 +476,13 @@ def send_session_email_to_group(action, grupa_naziv, pocetak, kraj, cena, client
 </div>
 """
 
-    resend.Emails.send({
-        "from": "Hrio <noreply@hrioapp.com>",
-        "to": ["igorpavlov106@gmail.com"],
-        "subject": f"{c['icon']} {c['title']} - {grupa_naziv}",
-        "html": psiholog_html
-    })
+    if therapist_email:
+        resend.Emails.send({
+            "from": "Hrio <noreply@hrioapp.com>",
+            "to": [therapist_email],
+            "subject": f"{c['icon']} {c['title']} - {grupa_naziv}",
+            "html": psiholog_html
+        })
 
     for member in client_emails:
         if not member.get("email"):
@@ -2240,6 +2258,7 @@ async def create_sesija(
     database.flush()  # get the ID before creating links
 
     # Create klijent link
+    klijent = None
     if sesija_data.klijent_id:
         klijent = database.query(Klijent).filter(
             Klijent.id == sesija_data.klijent_id,
@@ -2261,7 +2280,8 @@ async def create_sesija(
                 _recompute_client_free_sessions(database, klijent.id)
 
     # Create grupa link
-    elif sesija_data.grupa_id:
+    grupa = None
+    if sesija_data.grupa_id:
         grupa = database.query(Grupa).filter(
             Grupa.id == sesija_data.grupa_id,
             Grupa.tenant_id == tenant_id
@@ -2276,6 +2296,27 @@ async def create_sesija(
 
     database.commit()
     database.refresh(db_sesija)
+
+    # Send emails - mirrors the "updated" notification sent from
+    # update_sesija, so scheduling a session notifies the same way editing
+    # one already does.
+    if grupa:
+        group_members = database.query(GrupaKlijent).filter(GrupaKlijent.grupa_id == grupa.id, GrupaKlijent.tenant_id == tenant_id).all()
+        member_emails = []
+        for gk in group_members:
+            gk_klijent = database.query(Klijent).filter(Klijent.id == gk.klijent_id, Klijent.tenant_id == tenant_id).first()
+            if gk_klijent:
+                member_emails.append({"name": f"{gk_klijent.ime} {gk_klijent.prezime}", "email": gk_klijent.email})
+        try:
+            send_session_email_to_group(action="created", grupa_naziv=grupa.naziv, pocetak=db_sesija.pocetak, kraj=db_sesija.kraj, cena=db_sesija.cena, client_emails=member_emails, therapist_email=resolve_therapist_email(tenant_id, db_sesija.therapist_id, database))
+        except Exception as e:
+            logger.error(f"Failed to send group email: {e}")
+    elif klijent:
+        try:
+            send_session_email(action="created", client_name=f"{klijent.ime} {klijent.prezime}", pocetak=db_sesija.pocetak, kraj=db_sesija.kraj, cena=db_sesija.cena, client_email=klijent.email, therapist_email=resolve_therapist_email(tenant_id, db_sesija.therapist_id, database))
+        except Exception as e:
+            logger.error(f"Failed to send email: {e}")
+
     return db_sesija
 
 @app.post("/sesija/bulk/", response_model=None, tags=["Sesija"])
@@ -2467,7 +2508,7 @@ async def update_sesija(
                 if member:
                     member_emails.append({"name": f"{member.ime} {member.prezime}", "email": member.email})
             try:
-                send_session_email_to_group(action="updated", grupa_naziv=grupa.naziv, pocetak=db_sesija.pocetak, kraj=db_sesija.kraj, cena=db_sesija.cena, client_emails=member_emails)
+                send_session_email_to_group(action="updated", grupa_naziv=grupa.naziv, pocetak=db_sesija.pocetak, kraj=db_sesija.kraj, cena=db_sesija.cena, client_emails=member_emails, therapist_email=resolve_therapist_email(tenant_id, db_sesija.therapist_id, database))
             except Exception as e:
                 logger.error(f"Failed to send group email: {e}")
     else:
@@ -2484,7 +2525,7 @@ async def update_sesija(
                     client_name = f"{klijent.ime} {klijent.prezime}"
                     client_email = klijent.email
         try:
-            send_session_email(action="updated", client_name=client_name, pocetak=db_sesija.pocetak, kraj=db_sesija.kraj, cena=db_sesija.cena, client_email=client_email)
+            send_session_email(action="updated", client_name=client_name, pocetak=db_sesija.pocetak, kraj=db_sesija.kraj, cena=db_sesija.cena, client_email=client_email, therapist_email=resolve_therapist_email(tenant_id, db_sesija.therapist_id, database))
         except Exception as e:
             logger.error(f"Failed to send email: {e}")
 
