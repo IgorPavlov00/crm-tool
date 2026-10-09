@@ -9,6 +9,7 @@ const AuthPage: React.FC = () => {
     signIn,
     signUp,
     signInWithGoogle,
+    signInWithEmailLink,
     resetPassword,
     createProfile,
     user,
@@ -22,6 +23,9 @@ const AuthPage: React.FC = () => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+  // Login defaults to a one-time email link so therapists don't need to
+  // remember a password; password login stays available as an option.
+  const [loginMethod, setLoginMethod] = useState<"link" | "password">("link");
 
   // A shared invite link means this person almost certainly doesn't have an
   // account yet - default straight to the registration form for them.
@@ -41,6 +45,25 @@ const AuthPage: React.FC = () => {
       setError(result.error);
     } else if (result.needsProfile) {
       setView("setup-practice");
+    }
+
+    setLoading(false);
+  };
+
+  const handleEmailLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setSuccessMessage("");
+    setLoading(true);
+
+    const result = await signInWithEmailLink(email);
+
+    if (result.error) {
+      setError(result.error);
+    } else {
+      setSuccessMessage(
+        "Poslali smo vam link za prijavu. Otvorite email i kliknite na link - bićete automatski prijavljeni.",
+      );
     }
 
     setLoading(false);
@@ -281,7 +304,9 @@ const AuthPage: React.FC = () => {
             {inviteTenantName
               ? `Pridružujete se praksi "${inviteTenantName}"`
               : view === "login"
-                ? "Prijavite se u svoju praksu"
+                ? loginMethod === "link"
+                  ? "Unesite email i poslaćemo vam link za prijavu - bez lozinke"
+                  : "Prijavite se u svoju praksu"
                 : "Započnite upravljanje svojom praksom"}
           </p>
         </div>
@@ -322,7 +347,13 @@ const AuthPage: React.FC = () => {
 
         {/* Email/Password form */}
         <form
-          onSubmit={view === "login" ? handleLogin : handleRegister}
+          onSubmit={
+            view === "login"
+              ? loginMethod === "link"
+                ? handleEmailLink
+                : handleLogin
+              : handleRegister
+          }
           className="auth-form"
         >
           {view === "register" && (
@@ -364,17 +395,19 @@ const AuthPage: React.FC = () => {
             />
           </div>
 
-          <div className="auth-field">
-            <label>Lozinka</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              required
-              minLength={6}
-            />
-          </div>
+          {(view === "register" || loginMethod === "password") && (
+            <div className="auth-field">
+              <label>Lozinka</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                minLength={6}
+              />
+            </div>
+          )}
 
           <button
             type="submit"
@@ -384,12 +417,33 @@ const AuthPage: React.FC = () => {
             {loading
               ? "Učitavanje..."
               : view === "login"
-                ? "Prijavi se"
+                ? loginMethod === "link"
+                  ? "Pošalji link za prijavu"
+                  : "Prijavi se"
                 : "Registruj se"}
           </button>
         </form>
 
         {view === "login" && (
+          <div className="auth-toggle">
+            <p>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginMethod(loginMethod === "link" ? "password" : "link");
+                  setError("");
+                  setSuccessMessage("");
+                }}
+              >
+                {loginMethod === "link"
+                  ? "Prijava lozinkom"
+                  : "Prijava putem email linka (bez lozinke)"}
+              </button>
+            </p>
+          </div>
+        )}
+
+        {view === "login" && loginMethod === "password" && (
           <div className="auth-toggle">
             <p>
               <button

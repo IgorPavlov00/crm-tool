@@ -10,6 +10,7 @@ interface InviteEntry {
 interface InviteResult extends InviteEntry {
   status: "invited" | "already_exists" | "already_has_login" | "email_failed" | "invalid" | "error";
   link?: string | null;
+  detail?: string;
 }
 
 const STATUS_LABELS: Record<InviteResult["status"], { label: string; bg: string; color: string }> = {
@@ -70,7 +71,7 @@ const BulkInviteModal: React.FC<{ onClose: () => void; onDone: () => void }> = (
           <>
             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 12px" }}>
               Poslato pozivnica: <strong>{invitedCount}</strong> od {results.length}. Pozvani terapeuti su već odobreni
-              i dobiće email sa linkom da postave lozinku.
+              i dobiće email sa linkom kojim se automatski prijavljuju.
             </p>
             <div className="mhc-table-wrap" style={{ maxHeight: 380, overflowY: "auto" }}>
               <table className="mhc-table">
@@ -105,6 +106,11 @@ const BulkInviteModal: React.FC<{ onClose: () => void; onDone: () => void }> = (
                           <span className="mhc-badge" style={{ background: s.bg, color: s.color, whiteSpace: "nowrap" }}>
                             {s.label}
                           </span>
+                          {r.detail && (
+                            <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 4, maxWidth: 260 }}>
+                              {r.detail}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -122,7 +128,7 @@ const BulkInviteModal: React.FC<{ onClose: () => void; onDone: () => void }> = (
           <>
             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 12px" }}>
               Nalepite listu, npr. <code>Ime Prezime &lt;email@primer.com&gt;</code>, odvojeno zarezom ili novim redom.
-              Svako dobija email sa linkom da postavi lozinku, a nalog je odmah odobren.
+              Svako dobija email sa linkom kojim potvrđuje nalog i automatski se prijavljuje, a nalog je odmah odobren.
             </p>
             <textarea
               className="mhc-input"
