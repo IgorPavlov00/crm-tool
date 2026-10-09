@@ -4704,12 +4704,15 @@ def _supabase_generate_invite_link(email: str, full_name: Optional[str]) -> tupl
     via Resend, which avoids Supabase's very low built-in email limits."""
     import httpx
 
+    headers = {"apikey": SUPABASE_SERVICE_ROLE_KEY}
+    # Legacy service_role keys are JWTs and also go in Authorization; the
+    # newer "sb_secret_..." keys are rejected there and only work as apikey.
+    if SUPABASE_SERVICE_ROLE_KEY.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {SUPABASE_SERVICE_ROLE_KEY}"
+
     resp = httpx.post(
         f"{SUPABASE_URL}/auth/v1/admin/generate_link",
-        headers={
-            "apikey": SUPABASE_SERVICE_ROLE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        },
+        headers=headers,
         json={
             "type": "invite",
             "email": email,
@@ -4720,7 +4723,13 @@ def _supabase_generate_invite_link(email: str, full_name: Optional[str]) -> tupl
     )
     if resp.status_code == 422 and "exist" in resp.text.lower():
         raise SupabaseUserExists()
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        try:
+            err = resp.json()
+            message = err.get("msg") or err.get("message") or err.get("error_description") or err.get("error")
+        except ValueError:
+            message = None
+        raise RuntimeError(f"Supabase {resp.status_code}: {message or resp.text[:200]}")
     body = resp.json()
     user_id = body.get("id") or (body.get("user") or {}).get("id")
     action_link = body.get("action_link") or (body.get("properties") or {}).get("action_link")
@@ -4798,7 +4807,7 @@ def admin_invite_therapists(
             continue
         except Exception as e:
             logger.error(f"Supabase invite failed for {email}: {e}")
-            results.append({"email": email, "full_name": full_name, "status": "error"})
+            results.append({"email": email, "full_name": full_name, "status": "error", "detail": str(e)[:300]})
             continue
 
         tenant = Tenant(name=full_name or email)

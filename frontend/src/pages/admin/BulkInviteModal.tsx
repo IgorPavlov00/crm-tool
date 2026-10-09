@@ -10,6 +10,7 @@ interface InviteEntry {
 interface InviteResult extends InviteEntry {
   status: "invited" | "already_exists" | "already_has_login" | "email_failed" | "invalid" | "error";
   link?: string | null;
+  detail?: string;
 }
 
 const STATUS_LABELS: Record<InviteResult["status"], { label: string; bg: string; color: string }> = {
@@ -105,6 +106,11 @@ const BulkInviteModal: React.FC<{ onClose: () => void; onDone: () => void }> = (
                           <span className="mhc-badge" style={{ background: s.bg, color: s.color, whiteSpace: "nowrap" }}>
                             {s.label}
                           </span>
+                          {r.detail && (
+                            <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 4, maxWidth: 260 }}>
+                              {r.detail}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
