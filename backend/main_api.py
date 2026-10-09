@@ -219,6 +219,12 @@ def init_db():
             connect_args={"check_same_thread": False}
         )
     else:
+        # SQLAlchemy 2.1 defaults plain postgresql:// URLs to psycopg (v3),
+        # but we ship psycopg2 - name the driver explicitly.
+        for prefix in ("postgres://", "postgresql://"):
+            if DATABASE_URL.startswith(prefix):
+                DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len(prefix):]
+                break
         engine = create_engine(
             DATABASE_URL,
             pool_size=10,
