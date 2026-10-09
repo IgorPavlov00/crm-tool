@@ -209,6 +209,27 @@ def run_light_migrations(engine):
                 conn.rollback()
 
 
+# First supervision dates every therapist should see. Only seeded while the
+# table is still empty, so events the admin later edits/deletes stay that way.
+DEFAULT_SUPERVISION_EVENTS = [
+    datetime(2026, 10, 30, 18, 0),
+    datetime(2026, 11, 30, 18, 0),
+]
+
+
+def seed_default_supervision_events(session_factory):
+    db = session_factory()
+    try:
+        if db.query(SupervisionEvent).first() is None:
+            for starts_at in DEFAULT_SUPERVISION_EVENTS:
+                db.add(SupervisionEvent(title="Supervizija", type="supervizija", starts_at=starts_at))
+            db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+    finally:
+        db.close()
+
+
 def init_db():
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/Class_Diagram.db")
 
@@ -240,6 +261,7 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
     run_light_migrations(engine)
+    seed_default_supervision_events(SessionLocal)
 
     return SessionLocal
 
@@ -5344,6 +5366,249 @@ def admin_list_audit_log(
         }
         for e in entries
     ]
+
+
+############################################
+# Events / Supervision (Dešavanja/supervizije)
+############################################
+
+SUPERVISION_EVENT_TYPES = {"supervizija", "desavanje"}
+
+
+class SupervisionEventCreate(BaseModel):
+    title: str
+    type: Optional[str] = "supervizija"
+    starts_at: datetime
+    location: Optional[str] = None
+    description: Optional[str] = None
+
+
+class SupervisionEventUpdate(BaseModel):
+    title: Optional[str] = None
+    type: Optional[str] = None
+    starts_at: Optional[datetime] = None
+    location: Optional[str] = None
+    description: Optional[str] = None
+
+
+def require_approved_member(
+        request: Request,
+        database: Session = Depends(get_db),
+) -> "UserProfile":
+    """Any approved therapist, resolved from the verified bearer token -
+    used so a therapist can only ever sign themselves up/out."""
+    supabase_user_id = get_verified_supabase_user_id(request)
+    profile = database.query(UserProfile).filter(
+        UserProfile.supabase_user_id == supabase_user_id
+    ).first()
+    if not profile:
+        raise HTTPException(status_code=401, detail="No profile for this account")
+    if not profile.is_approved:
+        raise HTTPException(status_code=403, detail="Account pending approval")
+    return profile
+
+
+def _supervision_event_payload(e: "SupervisionEvent") -> dict:
+    return {
+        "id": e.id,
+        "title": e.title,
+        "type": e.type,
+        "starts_at": e.starts_at.isoformat(),
+        "location": e.location,
+        "description": e.description,
+    }
+
+
+def _clean_event_type(value: Optional[str]) -> str:
+    event_type = (value or "supervizija").strip().lower()
+    if event_type not in SUPERVISION_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Nepoznat tip događaja: {value}")
+    return event_type
+
+
+@app.get("/supervision/events", tags=["Supervision"])
+def list_supervision_events(
+        member: UserProfile = Depends(require_approved_member),
+        database: Session = Depends(get_db),
+):
+    events = database.query(SupervisionEvent).order_by(SupervisionEvent.starts_at.asc()).all()
+    signups = database.query(SupervisionSignup).all()
+    counts = Counter(s.event_id for s in signups)
+    mine = {s.event_id for s in signups if s.user_profile_id == member.id}
+    return [
+        {**_supervision_event_payload(e), "signup_count": counts.get(e.id, 0), "signed_up": e.id in mine}
+        for e in events
+    ]
+
+
+@app.post("/supervision/events/{event_id}/signup", tags=["Supervision"])
+def signup_for_supervision_event(
+        event_id: int,
+        member: UserProfile = Depends(require_approved_member),
+        database: Session = Depends(get_db),
+):
+    event = database.query(SupervisionEvent).filter(SupervisionEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Događaj nije pronađen")
+    if event.starts_at < datetime.now():
+        raise HTTPException(status_code=400, detail="Prijave za ovaj događaj su zatvorene.")
+    existing = database.query(SupervisionSignup).filter(
+        SupervisionSignup.event_id == event_id,
+        SupervisionSignup.user_profile_id == member.id,
+    ).first()
+    if not existing:
+        database.add(SupervisionSignup(event_id=event_id, user_profile_id=member.id))
+        try:
+            database.commit()
+        except IntegrityError:
+            database.rollback()  # double click - already signed up
+    return {"event_id": event_id, "signed_up": True}
+
+
+@app.delete("/supervision/events/{event_id}/signup", tags=["Supervision"])
+def cancel_supervision_signup(
+        event_id: int,
+        member: UserProfile = Depends(require_approved_member),
+        database: Session = Depends(get_db),
+):
+    event = database.query(SupervisionEvent).filter(SupervisionEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Događaj nije pronađen")
+    if event.starts_at < datetime.now():
+        raise HTTPException(status_code=400, detail="Događaj je već prošao.")
+    database.query(SupervisionSignup).filter(
+        SupervisionSignup.event_id == event_id,
+        SupervisionSignup.user_profile_id == member.id,
+    ).delete()
+    database.commit()
+    return {"event_id": event_id, "signed_up": False}
+
+
+@app.get("/admin/supervision", tags=["Admin"])
+def admin_supervision_overview(
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    events = database.query(SupervisionEvent).order_by(SupervisionEvent.starts_at.asc()).all()
+    signups = database.query(SupervisionSignup).order_by(SupervisionSignup.created_at.asc()).all()
+    therapists = database.query(UserProfile).filter(
+        UserProfile.is_approved == True  # noqa: E712
+    ).order_by(UserProfile.created_at).all()
+    names = {t.id: _therapist_name(t) for t in therapists}
+
+    by_event: dict = {}
+    per_therapist = Counter()
+    for s in signups:
+        by_event.setdefault(s.event_id, []).append({
+            "user_profile_id": s.user_profile_id,
+            "name": names.get(s.user_profile_id) or _therapist_name(s.user_profile) or "—",
+            "signed_up_at": s.created_at.isoformat() if s.created_at else None,
+        })
+        per_therapist[s.user_profile_id] += 1
+
+    return {
+        "events": [
+            {**_supervision_event_payload(e), "signups": by_event.get(e.id, [])}
+            for e in events
+        ],
+        "therapists": [
+            {
+                "user_profile_id": t.id,
+                "name": names[t.id],
+                "active": t.active,
+                "signup_count": per_therapist.get(t.id, 0),
+            }
+            for t in therapists
+        ],
+        "total_events": len(events),
+        "total_signups": len(signups),
+    }
+
+
+@app.post("/admin/supervision/events", tags=["Admin"])
+def admin_create_supervision_event(
+        data: SupervisionEventCreate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    title = (data.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Naziv je obavezan.")
+    event = SupervisionEvent(
+        title=title,
+        type=_clean_event_type(data.type),
+        starts_at=data.starts_at.replace(tzinfo=None),
+        location=(data.location or "").strip() or None,
+        description=(data.description or "").strip() or None,
+        created_by_id=admin.id,
+    )
+    database.add(event)
+    database.flush()
+    _log_admin_action(database, admin, "SUPERVISION_EVENT_CREATED", "supervision_event", event.id)
+    database.commit()
+    database.refresh(event)
+    return _supervision_event_payload(event)
+
+
+@app.put("/admin/supervision/events/{event_id}", tags=["Admin"])
+def admin_update_supervision_event(
+        event_id: int,
+        data: SupervisionEventUpdate,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    event = database.query(SupervisionEvent).filter(SupervisionEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Događaj nije pronađen")
+    if data.title is not None:
+        if not data.title.strip():
+            raise HTTPException(status_code=400, detail="Naziv je obavezan.")
+        event.title = data.title.strip()
+    if data.type is not None:
+        event.type = _clean_event_type(data.type)
+    if data.starts_at is not None:
+        event.starts_at = data.starts_at.replace(tzinfo=None)
+    if data.location is not None:
+        event.location = data.location.strip() or None
+    if data.description is not None:
+        event.description = data.description.strip() or None
+    _log_admin_action(database, admin, "SUPERVISION_EVENT_UPDATED", "supervision_event", event.id)
+    database.commit()
+    database.refresh(event)
+    return _supervision_event_payload(event)
+
+
+@app.delete("/admin/supervision/events/{event_id}", tags=["Admin"])
+def admin_delete_supervision_event(
+        event_id: int,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    event = database.query(SupervisionEvent).filter(SupervisionEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Događaj nije pronađen")
+    database.delete(event)
+    _log_admin_action(database, admin, "SUPERVISION_EVENT_DELETED", "supervision_event", event_id)
+    database.commit()
+    return {"message": "Deleted", "id": event_id}
+
+
+@app.delete("/admin/supervision/events/{event_id}/signups/{user_profile_id}", tags=["Admin"])
+def admin_remove_supervision_signup(
+        event_id: int,
+        user_profile_id: int,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    deleted = database.query(SupervisionSignup).filter(
+        SupervisionSignup.event_id == event_id,
+        SupervisionSignup.user_profile_id == user_profile_id,
+    ).delete()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Prijava nije pronađena")
+    _log_admin_action(database, admin, "SUPERVISION_SIGNUP_REMOVED", "supervision_event", event_id)
+    database.commit()
+    return {"message": "Removed", "event_id": event_id, "user_profile_id": user_profile_id}
 
 
 ############################################
