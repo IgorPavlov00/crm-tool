@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ClientAuthProvider } from "./contexts/ClientAuthContext";
 import AdminPanel from "./pages/AdminPanel";
 import Calendar from "./pages/Calendar";
+import Supervision from "./pages/Supervision";
 import AuthPage from "./pages/AuthPage";
 import FindTherapist from "./pages/FindTherapist";
 import LandingPage from "./pages/LandingPage";
@@ -37,7 +38,7 @@ interface SubscriptionInfo {
 const AppContent: React.FC = () => {
   const { user, profile, loading, signOut, passwordRecoveryPending } = useAuth();
   const navigate = useNavigate();
-  const [activePage, setActivePage] = useState<"admin" | "calendar">("admin");
+  const [activePage, setActivePage] = useState<"admin" | "calendar" | "supervision">("admin");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
@@ -193,7 +194,7 @@ const AppContent: React.FC = () => {
   //     : null;
 
   // Logged in — show app
-  const handleNavClick = (page: "admin" | "calendar") => {
+  const handleNavClick = (page: "admin" | "calendar" | "supervision") => {
     setActivePage(page);
     if (isMobile) setSidebarOpen(false);
   };
@@ -237,7 +238,7 @@ const AppContent: React.FC = () => {
               <span className="psych-logo-text-sm">PsihoApp</span>
             </div>
             <div className="psych-mobile-page-label">
-              {activePage === "admin" ? "Admin" : "Kalendar"}
+              {activePage === "admin" ? "Admin" : activePage === "calendar" ? "Kalendar" : "Dešavanja"}
             </div>
           </header>
         )}
@@ -336,6 +337,27 @@ const AppContent: React.FC = () => {
                 <line x1="3" y1="10" x2="21" y2="10" />
               </svg>
               Kalendar
+            </button>
+            <button
+              className={`psych-sidebar-btn ${activePage === "supervision" ? "active" : ""}`}
+              onClick={() => handleNavClick("supervision")}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              Dešavanja/supervizije
             </button>
             {profile?.is_admin && (
               <button
@@ -489,6 +511,7 @@ const AppContent: React.FC = () => {
           */}
           {activePage === "admin" && <AdminPanel />}
           {activePage === "calendar" && <Calendar />}
+          {activePage === "supervision" && <Supervision />}
         </main>
       </div>
     </TableProvider>
