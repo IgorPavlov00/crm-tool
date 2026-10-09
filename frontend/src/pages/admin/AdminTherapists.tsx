@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import DateRangePicker from "./DateRangePicker";
 import { DateRange, computeRange, rangeQueryParams } from "./dateRange";
 import { backendBase, Therapist } from "./adminApi";
+import BulkInviteModal from "./BulkInviteModal";
 
 type SortKey = "name" | "clients" | "sessions";
 
@@ -21,6 +22,7 @@ const AdminTherapists: React.FC = () => {
   const [inviteError, setInviteError] = useState("");
   const [copied, setCopied] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [showBulkInvite, setShowBulkInvite] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -130,6 +132,9 @@ const AdminTherapists: React.FC = () => {
         </select>
         <button type="button" className="mhc-btn mhc-btn-primary" onClick={openInvite}>
           + Dodaj terapeuta
+        </button>
+        <button type="button" className="mhc-btn mhc-btn-secondary" onClick={() => setShowBulkInvite(true)}>
+          Pozovi više terapeuta
         </button>
       </div>
 
@@ -271,6 +276,8 @@ const AdminTherapists: React.FC = () => {
           </div>
         </div>
       )}
+
+      {showBulkInvite && <BulkInviteModal onClose={() => setShowBulkInvite(false)} onDone={load} />}
     </div>
   );
 };
