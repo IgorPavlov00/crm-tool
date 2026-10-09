@@ -4681,7 +4681,7 @@ def admin_approve_therapist(
 # password), a ready-to-use approved profile with its own practice, and
 # emails them a link that lands on the "Postavite lozinku" screen.
 # Needs SUPABASE_SERVICE_ROLE_KEY (Supabase -> Project Settings -> API).
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_SERVICE_ROLE_KEY = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip() or None
 THERAPIST_APP_URL = os.getenv("THERAPIST_APP_URL", "https://crm-tool-frontend-e885b1.onrender.com/therapist")
 
 
