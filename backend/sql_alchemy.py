@@ -291,6 +291,43 @@ class AttendanceRecord(Base):
 
 
 ############################################
+# Events / Supervision (Dešavanja/supervizije)
+############################################
+
+class SupervisionEvent(Base):
+    """An event the admin creates once and every therapist sees on their
+    "Dešavanja/supervizije" calendar - deliberately global (not filtered by
+    tenant), same as the rest of the admin area."""
+    __tablename__ = "supervision_event"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    type: Mapped[str] = mapped_column(String(50), default="supervizija")  # supervizija | desavanje
+    starts_at: Mapped[dt_datetime] = mapped_column(DateTime, index=True)  # local (Serbia) wall-clock time
+    location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user_profile.id"), nullable=True)
+    created_at: Mapped[dt_datetime] = mapped_column(DateTime, default=dt_datetime.utcnow)
+
+    signups = relationship("SupervisionSignup", back_populates="event", cascade="all, delete-orphan")
+
+
+class SupervisionSignup(Base):
+    __tablename__ = "supervision_signup"
+    __table_args__ = (
+        UniqueConstraint("event_id", "user_profile_id", name="uq_supervision_signup_event_member"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("supervision_event.id"), index=True)
+    user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profile.id"), index=True)
+    created_at: Mapped[dt_datetime] = mapped_column(DateTime, default=dt_datetime.utcnow)
+
+    event = relationship("SupervisionEvent", back_populates="signups")
+    user_profile = relationship("UserProfile", foreign_keys=[user_profile_id])
+
+
+############################################
 # Admin: Audit Log
 ############################################
 

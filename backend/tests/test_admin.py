@@ -896,3 +896,71 @@ def test_admin_can_approve_pending_therapist_and_email_is_sent(seeded, monkeypat
     listing = client.get("/admin/therapists", headers=auth_headers("owner-sub"))
     row = next(r for r in listing.json() if r["user_id"] == pending_id)
     assert row["is_approved"] is True
+
+
+def test_default_supervision_events_are_seeded():
+    db = SessionLocal()
+    try:
+        starts = {e.starts_at for e in db.query(main_api.SupervisionEvent).all()}
+    finally:
+        db.close()
+    assert datetime(2026, 10, 30, 18, 0) in starts
+    assert datetime(2026, 11, 30, 18, 0) in starts
+
+
+def test_supervision_admin_creates_event_therapists_sign_up_and_admin_sees_stats(seeded):
+    starts_at = (datetime.now() + timedelta(days=10)).replace(hour=18, minute=0, second=0, microsecond=0)
+
+    # Only admins can create events; anonymous callers are rejected.
+    assert client.post("/admin/supervision/events", json={"title": "X", "starts_at": starts_at.isoformat()},
+                       headers=auth_headers("member-sub")).status_code == 403
+    assert client.get("/supervision/events").status_code == 401
+
+    created = client.post(
+        "/admin/supervision/events",
+        json={"title": "Grupna supervizija", "type": "supervizija", "starts_at": starts_at.isoformat()},
+        headers=auth_headers("owner-sub"),
+    )
+    assert created.status_code == 200
+    event_id = created.json()["id"]
+
+    # Every therapist sees it, not signed up yet.
+    listing = client.get("/supervision/events", headers=auth_headers("member-sub")).json()
+    row = next(e for e in listing if e["id"] == event_id)
+    assert row["signed_up"] is False and row["signup_count"] == 0
+
+    # Signing up twice is idempotent.
+    for _ in range(2):
+        assert client.post(f"/supervision/events/{event_id}/signup", headers=auth_headers("member-sub")).status_code == 200
+    assert client.post(f"/supervision/events/{event_id}/signup", headers=auth_headers("owner-sub")).status_code == 200
+
+    row = next(e for e in client.get("/supervision/events", headers=auth_headers("member-sub")).json() if e["id"] == event_id)
+    assert row["signed_up"] is True and row["signup_count"] == 2
+
+    overview = client.get("/admin/supervision", headers=auth_headers("owner-sub"))
+    assert overview.status_code == 200
+    body = overview.json()
+    event = next(e for e in body["events"] if e["id"] == event_id)
+    assert {s["name"] for s in event["signups"]} == {"Member Person", "Owner Person"}
+    member_stat = next(t for t in body["therapists"] if t["name"] == "Member Person")
+    assert member_stat["signup_count"] >= 1
+    assert client.get("/admin/supervision", headers=auth_headers("member-sub")).status_code == 403
+
+    # Therapist can cancel their own sign-up.
+    assert client.delete(f"/supervision/events/{event_id}/signup", headers=auth_headers("member-sub")).status_code == 200
+    row = next(e for e in client.get("/supervision/events", headers=auth_headers("member-sub")).json() if e["id"] == event_id)
+    assert row["signed_up"] is False and row["signup_count"] == 1
+
+    assert client.delete(f"/admin/supervision/events/{event_id}", headers=auth_headers("owner-sub")).status_code == 200
+    assert all(e["id"] != event_id for e in client.get("/supervision/events", headers=auth_headers("member-sub")).json())
+
+
+def test_cannot_sign_up_for_past_supervision_event(seeded):
+    past = (datetime.now() - timedelta(days=3)).isoformat()
+    event_id = client.post(
+        "/admin/supervision/events",
+        json={"title": "Prošla supervizija", "starts_at": past},
+        headers=auth_headers("owner-sub"),
+    ).json()["id"]
+    resp = client.post(f"/supervision/events/{event_id}/signup", headers=auth_headers("member-sub"))
+    assert resp.status_code == 400

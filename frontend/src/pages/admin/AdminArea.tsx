@@ -8,6 +8,7 @@ import AdminClients from "./AdminClients";
 import AdminClientDetail from "./AdminClientDetail";
 import AdminSessions from "./AdminSessions";
 import AdminTeamAttendance from "./AdminTeamAttendance";
+import AdminSupervision from "./AdminSupervision";
 import AdminReports from "./AdminReports";
 import { ThemeProvider, useTheme } from "./ThemeContext";
 import "./AdminArea.css";
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { to: "therapists", label: "Terapeuti", icon: "⚕" },
   { to: "sessions", label: "Sesije", icon: "◷" },
   { to: "team-attendance", label: "Prisustvo tima", icon: "✓" },
+  { to: "supervision", label: "Supervizije", icon: "◈" },
   { to: "reports", label: "Izveštaji", icon: "☷" },
 ];
 
@@ -116,6 +118,7 @@ const AdminAreaShell: React.FC = () => {
           <Route path="therapists/:therapistId" element={<AdminTherapistDetail />} />
           <Route path="sessions" element={<AdminSessions />} />
           <Route path="team-attendance" element={<AdminTeamAttendance />} />
+          <Route path="supervision" element={<AdminSupervision />} />
           <Route path="reports" element={<AdminReports />} />
           <Route path="*" element={<Navigate to="dashboard" replace />} />
         </Routes>
