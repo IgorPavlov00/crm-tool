@@ -1023,3 +1023,31 @@ def test_bulk_invite_reports_missing_configuration(seeded, monkeypatch):
                        headers=auth_headers("owner-sub"))
     assert resp.status_code == 500
     assert "SUPABASE_SERVICE_ROLE_KEY" in resp.json()["message"]
+
+
+def test_bulk_invite_shows_supabase_error_reason(seeded, monkeypatch):
+    monkeypatch.setattr(main_api, "SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(main_api, "SUPABASE_SERVICE_ROLE_KEY", "sb_secret_abc")
+    captured = {}
+
+    class FakeResp:
+        status_code = 401
+        text = '{"msg":"Invalid API key"}'
+
+        def json(self):
+            return {"msg": "Invalid API key"}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["headers"] = headers
+        return FakeResp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    resp = client.post("/admin/therapists/invite", json={"invites": [{"email": "err@example.com"}]},
+                       headers=auth_headers("owner-sub"))
+    result = resp.json()["results"][0]
+    assert result["status"] == "error"
+    assert "Invalid API key" in result["detail"]
+    # New-style secret keys must not be sent as a Bearer token.
+    assert captured["headers"] == {"apikey": "sb_secret_abc"}
