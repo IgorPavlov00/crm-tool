@@ -74,26 +74,6 @@ const tabs: {
     ),
   },
   {
-    key: "cena",
-    label: "Uplate",
-    mobileLabel: "Uplate",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <line x1="12" y1="1" x2="12" y2="23" />
-        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-      </svg>
-    ),
-  },
-  {
     key: "statistika",
     label: "Statistika",
     mobileLabel: "Stats",
@@ -221,6 +201,7 @@ const tableConfigs: Record<string, any> = {
       showPagination: true,
       rowsPerPage: 10,
       actionButtons: true,
+      showAddButton: false,
       showPaymentButton: true,
       showExportButton: true,
       columns: [
@@ -388,103 +369,6 @@ const tableConfigs: Record<string, any> = {
       ],
     },
   },
-  cena: {
-    title: "Lista Uplata",
-    entity: "Cena",
-    endpoint: "/cena/",
-    options: {
-      showHeader: true,
-      stripedRows: false,
-      showPagination: true,
-      rowsPerPage: 10,
-      actionButtons: true,
-      columns: [
-        {
-          label: "ID",
-          column_type: "field",
-          field: "id",
-          type: "int",
-          required: true,
-        },
-        {
-          label: "Cena",
-          column_type: "field",
-          field: "cena",
-          type: "float",
-          required: true,
-        },
-        {
-          label: "Datum Uplate",
-          column_type: "field",
-          field: "datum_uplate",
-          type: "date",
-          required: true,
-        },
-        {
-          label: "Način Plaćanja",
-          column_type: "field",
-          field: "nacin_placanja",
-          type: "str",
-          required: true,
-        },
-        {
-          label: "Status",
-          column_type: "field",
-          field: "status",
-          type: "str",
-          required: true,
-        },
-      ],
-      formColumns: [
-        {
-          column_type: "field",
-          field: "cena",
-          label: "Cena (RSD)",
-          type: "float",
-          required: true,
-        },
-        {
-          column_type: "field",
-          field: "datum_uplate",
-          label: "Datum Uplate",
-          type: "date",
-          required: true,
-        },
-        {
-          column_type: "field",
-          field: "nacin_placanja",
-          label: "Način Plaćanja",
-          type: "str",
-          required: true,
-        },
-        {
-          column_type: "field",
-          field: "status",
-          label: "Status",
-          type: "str",
-          required: true,
-        },
-        {
-          column_type: "lookup",
-          path: "sesija_2",
-          field: "sesija_2",
-          lookup_field: "id",
-          entity: "Sesija",
-          type: "int",
-          required: true,
-        },
-        {
-          column_type: "lookup",
-          path: "klijent_1",
-          field: "klijent_1",
-          lookup_field: "id",
-          entity: "Klijent",
-          type: "int",
-          required: true,
-        },
-      ],
-    },
-  },
 };
 
 const AdminPanel: React.FC = () => {
@@ -511,7 +395,7 @@ const AdminPanel: React.FC = () => {
         <div className="admin-header-text">
           <h1 className="admin-title">Admin Panel</h1>
           <p className="admin-subtitle">
-            Upravljajte klijentima, sesijama, grupama i uplatama
+            Upravljajte klijentima, sesijama i grupama
           </p>
         </div>
         <div className="admin-header-badge">
