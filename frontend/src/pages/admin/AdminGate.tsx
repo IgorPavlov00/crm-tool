@@ -101,15 +101,16 @@ const AdminGate: React.FC = () => {
   if (!profile.is_approved) return <PendingApprovalPage email={profile.email} onSignOut={signOut} />;
   if (subLoading) return <Spinner />;
 
-  if (subscription && !subscription.active) {
-    return (
-      <SubscriptionPaywall
-        everPaid={!!subscription.subscription_paid_until}
-        payment={subscription.payment_instructions}
-        onSignOut={signOut}
-      />
-    );
-  }
+  // Trial/paywall temporarily disabled until billing is implemented.
+  // if (subscription && !subscription.active) {
+  //   return (
+  //     <SubscriptionPaywall
+  //       everPaid={!!subscription.subscription_paid_until}
+  //       payment={subscription.payment_instructions}
+  //       onSignOut={signOut}
+  //     />
+  //   );
+  // }
 
   if (!profile.is_admin) return <Forbidden />;
 

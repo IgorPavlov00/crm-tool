@@ -173,23 +173,24 @@ const AppContent: React.FC = () => {
     );
   }
 
-  // Trial ended and no payment on file — block access to the app
-  if (subscription && !subscription.active) {
-    return (
-      <SubscriptionPaywall
-        everPaid={!!subscription.subscription_paid_until}
-        payment={subscription.payment_instructions}
-        onSignOut={signOut}
-      />
-    );
-  }
-
-  const trialDaysLeft =
-    subscription?.status === "trial" && subscription.trial_ends_at
-      ? Math.ceil(
-          (new Date(subscription.trial_ends_at).getTime() - Date.now()) / 86400000,
-        )
-      : null;
+  // Trial/paywall temporarily disabled until billing is implemented.
+  // // Trial ended and no payment on file — block access to the app
+  // if (subscription && !subscription.active) {
+  //   return (
+  //     <SubscriptionPaywall
+  //       everPaid={!!subscription.subscription_paid_until}
+  //       payment={subscription.payment_instructions}
+  //       onSignOut={signOut}
+  //     />
+  //   );
+  // }
+  //
+  // const trialDaysLeft =
+  //   subscription?.status === "trial" && subscription.trial_ends_at
+  //     ? Math.ceil(
+  //         (new Date(subscription.trial_ends_at).getTime() - Date.now()) / 86400000,
+  //       )
+  //     : null;
 
   // Logged in — show app
   const handleNavClick = (page: "admin" | "calendar") => {
@@ -465,6 +466,7 @@ const AppContent: React.FC = () => {
 
         {/* Main Content */}
         <main className="psych-main">
+          {/* Trial banner temporarily disabled until billing is implemented.
           {trialDaysLeft !== null && trialDaysLeft <= 5 && (
             <div
               style={{
@@ -484,6 +486,7 @@ const AppContent: React.FC = () => {
               Obnovite pretplatu da izbegnete prekid pristupa.
             </div>
           )}
+          */}
           {activePage === "admin" && <AdminPanel />}
           {activePage === "calendar" && <Calendar />}
         </main>
