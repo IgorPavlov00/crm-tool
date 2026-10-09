@@ -7,9 +7,10 @@ from datetime import datetime, timedelta, time as dt_time, date
 from collections import Counter
 from fastapi import Depends, FastAPI, HTTPException, Request, status, Body, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import create_engine, text, or_, func
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, selectinload, joinedload
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, ProgrammingError
 from pydantic_classes import *
 from sql_alchemy import *
@@ -53,18 +54,27 @@ origins = [
 ]
 def get_tenant_id(request: Request) -> int:
     """
-    Resolve tenant from the X-Tenant-ID header.
-    Every endpoint uses this via Depends().
+    Resolve the caller's practice (tenant) from their verified login token.
+    Every practice-data endpoint uses this via Depends().
+
+    The X-Tenant-ID header the frontend sends is deliberately NOT trusted:
+    it is just a number anyone could change, so trusting it would let one
+    practice (or an anonymous caller) read another practice's clients.
     """
-    tenant_id = request.headers.get("X-Tenant-ID")
+    supabase_user_id = get_verified_supabase_user_id(request)
 
-    if not tenant_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Tenant ID missing"
-        )
-
-    return int(tenant_id)
+    database = SessionLocal()
+    try:
+        profile = database.query(UserProfile).filter(
+            UserProfile.supabase_user_id == supabase_user_id
+        ).first()
+        if not profile:
+            raise HTTPException(status_code=401, detail="No profile for this account")
+        if not profile.is_approved:
+            raise HTTPException(status_code=403, detail="Account pending approval")
+        return profile.tenant_id
+    finally:
+        database.close()
 
 
 def run_light_migrations(engine):
@@ -98,6 +108,28 @@ def run_light_migrations(engine):
         "CREATE INDEX IF NOT EXISTS ix_klijent_therapist_id ON klijent (therapist_id)",
         "CREATE INDEX IF NOT EXISTS ix_sesija_therapist_id ON sesija (therapist_id)",
         "CREATE INDEX IF NOT EXISTS ix_sesija_pocetak ON sesija (pocetak)",
+        # Every practice-data query filters by tenant_id and joins on these
+        # foreign keys - without indexes Postgres scans whole tables
+        # (including every other practice's rows) on each request.
+        "CREATE INDEX IF NOT EXISTS ix_klijent_tenant_id ON klijent (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_klijent_email ON klijent (email)",
+        "CREATE INDEX IF NOT EXISTS ix_sesija_tenant_id ON sesija (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_grupa_tenant_id ON grupa (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cena_tenant_id ON cena (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cena_sesija_2_id ON cena (sesija_2_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cena_klijent_1_id ON cena (klijent_1_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sesijaklijent_tenant_id ON sesijaklijent (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sesijaklijent_sesija_id ON sesijaklijent (sesija_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sesijaklijent_klijent_id ON sesijaklijent (klijent_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sesijagrupa_tenant_id ON sesijagrupa (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sesijagrupa_sesija_1_id ON sesijagrupa (sesija_1_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sesijagrupa_grupa_id ON sesijagrupa (grupa_id)",
+        "CREATE INDEX IF NOT EXISTS ix_grupaklijent_tenant_id ON grupaklijent (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_grupaklijent_grupa_id ON grupaklijent (grupa_id)",
+        "CREATE INDEX IF NOT EXISTS ix_grupaklijent_klijent_id ON grupaklijent (klijent_id)",
+        "CREATE INDEX IF NOT EXISTS ix_klijent_napomena_klijent_id ON klijent_napomena (klijent_id)",
+        "CREATE INDEX IF NOT EXISTS ix_user_profile_tenant_id ON user_profile (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_supervision_signup_user_profile_id ON supervision_signup (user_profile_id)",
     ]
     with engine.connect() as conn:
         for stmt in statements:
@@ -580,6 +612,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Compress JSON responses (e.g. the calendar's session list) - typically
+# ~10x smaller over the network. Tiny responses are left as-is.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 ############################################
 #
 #   Middleware
@@ -733,7 +769,7 @@ _jwks_client = jwt.PyJWKClient(f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json") 
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
 
-def get_verified_supabase_user_id(request: Request) -> str:
+def get_verified_supabase_claims(request: Request) -> dict:
     """Verifies the bearer token's signature, expiry, audience and issuer,
     and returns the verified `sub` claim (the Supabase auth user id).
     Never trusts an unverified/self-reported id. Tries Supabase's JWKS
@@ -780,10 +816,13 @@ def get_verified_supabase_user_id(request: Request) -> str:
             logger.error("Neither SUPABASE_URL nor SUPABASE_JWT_SECRET is set - admin auth cannot verify tokens")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    sub = payload.get("sub")
-    if not sub:
+    if not payload.get("sub"):
         raise HTTPException(status_code=401, detail="Invalid token")
-    return sub
+    return payload
+
+
+def get_verified_supabase_user_id(request: Request) -> str:
+    return get_verified_supabase_claims(request)["sub"]
 
 
 def require_admin(
@@ -1781,6 +1820,19 @@ async def sync_grupa_members(
 #
 ############################################
 
+def _row_dict(obj) -> dict:
+    return {k: v for k, v in obj.__dict__.items() if k != "_sa_instance_state"}
+
+
+def _group_rows(rows, key: str) -> dict:
+    """{key value: [row dicts]} - loads related rows once instead of one
+    query per parent row."""
+    grouped = {}
+    for r in rows:
+        grouped.setdefault(getattr(r, key), []).append(_row_dict(r))
+    return grouped
+
+
 @app.get("/sesija/", tags=["Sesija"])
 def get_all_sesija(
     tenant_id: int = Depends(require_active_subscription),
@@ -1792,21 +1844,16 @@ def get_all_sesija(
 
     if detailed:
         sesija_list = database.query(Sesija).filter(Sesija.tenant_id == tenant_id).all()
+        cena_by = _group_rows(database.query(Cena).filter(Cena.tenant_id == tenant_id).all(), "sesija_2_id")
+        sk_by = _group_rows(database.query(SesijaKlijent).filter(SesijaKlijent.tenant_id == tenant_id).all(), "sesija_id")
+        sg_by = _group_rows(database.query(SesijaGrupa).filter(SesijaGrupa.tenant_id == tenant_id).all(), "sesija_1_id")
+
         result = []
-
         for sesija_item in sesija_list:
-            item_dict = sesija_item.__dict__.copy()
-            item_dict.pop("_sa_instance_state", None)
-
-            cena_list = database.query(Cena).filter(Cena.sesija_2_id == sesija_item.id, Cena.tenant_id == tenant_id).all()
-            item_dict["cena"] = [{k: v for k, v in c.__dict__.items() if k != "_sa_instance_state"} for c in cena_list]
-
-            sesijaklijent_list = database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == sesija_item.id, SesijaKlijent.tenant_id == tenant_id).all()
-            item_dict["sesijaklijent_1"] = [{k: v for k, v in x.__dict__.items() if k != "_sa_instance_state"} for x in sesijaklijent_list]
-
-            sesijagrupa_list = database.query(SesijaGrupa).filter(SesijaGrupa.sesija_1_id == sesija_item.id, SesijaGrupa.tenant_id == tenant_id).all()
-            item_dict["sesijagrupa_1"] = [{k: v for k, v in x.__dict__.items() if k != "_sa_instance_state"} for x in sesijagrupa_list]
-
+            item_dict = _row_dict(sesija_item)
+            item_dict["cena"] = cena_by.get(sesija_item.id, [])
+            item_dict["sesijaklijent_1"] = sk_by.get(sesija_item.id, [])
+            item_dict["sesijagrupa_1"] = sg_by.get(sesija_item.id, [])
             item_dict["placeno"] = sesija_item.id in paid_sesija_ids
             result.append(item_dict)
 
@@ -2403,7 +2450,7 @@ async def bulk_delete_sesija(
     for item_id in ids:
         db_sesija = database.query(Sesija).filter(Sesija.id == item_id, Sesija.tenant_id == tenant_id).first()
         if db_sesija:
-            database.delete(db_sesija)
+            _delete_sesija_with_links(database, db_sesija)
             deleted_count += 1
         else:
             not_found.append(item_id)
@@ -2580,6 +2627,44 @@ async def update_sesija(
     }
 
 
+def _delete_sesija_with_links(database: Session, sesija: "Sesija"):
+    """Postgres enforces foreign keys, so a session's client/group links
+    and payments have to go before the session itself."""
+    database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == sesija.id).delete(synchronize_session=False)
+    database.query(SesijaGrupa).filter(SesijaGrupa.sesija_1_id == sesija.id).delete(synchronize_session=False)
+    database.query(Cena).filter(Cena.sesija_2_id == sesija.id).delete(synchronize_session=False)
+    database.delete(sesija)
+
+
+def _session_has_other_participants(database: Session, sesija_id: int) -> bool:
+    return (
+        database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == sesija_id).count() > 0
+        or database.query(SesijaGrupa).filter(SesijaGrupa.sesija_1_id == sesija_id).count() > 0
+    )
+
+
+def _delete_klijent_with_links(database: Session, klijent: "Klijent"):
+    """Deleting a client also deletes their individual sessions (and those
+    sessions' payments) and their notes, and removes them from groups.
+    Group sessions and sessions shared with other clients are kept - the
+    client is only taken off them."""
+    links = database.query(SesijaKlijent).filter(SesijaKlijent.klijent_id == klijent.id).all()
+    session_ids = {l.sesija_id for l in links}
+    for l in links:
+        database.delete(l)
+    database.flush()
+
+    for sesija_id in session_ids:
+        sesija = database.query(Sesija).filter(Sesija.id == sesija_id).first()
+        if sesija and not _session_has_other_participants(database, sesija_id):
+            _delete_sesija_with_links(database, sesija)
+
+    database.query(Cena).filter(Cena.klijent_1_id == klijent.id).delete(synchronize_session=False)
+    database.query(KlijentNapomena).filter(KlijentNapomena.klijent_id == klijent.id).delete(synchronize_session=False)
+    database.query(GrupaKlijent).filter(GrupaKlijent.klijent_id == klijent.id).delete(synchronize_session=False)
+    database.delete(klijent)
+
+
 @app.delete("/sesija/{sesija_id}/", tags=["Sesija"])
 async def delete_sesija(
     sesija_id: int,
@@ -2589,7 +2674,13 @@ async def delete_sesija(
     db_sesija = database.query(Sesija).filter(Sesija.id == sesija_id, Sesija.tenant_id == tenant_id).first()
     if db_sesija is None:
         raise HTTPException(status_code=404, detail="Sesija not found")
-    database.delete(db_sesija)
+    affected_client_ids = [
+        l.klijent_id for l in database.query(SesijaKlijent).filter(SesijaKlijent.sesija_id == sesija_id).all()
+    ]
+    _delete_sesija_with_links(database, db_sesija)
+    database.flush()
+    for cid in affected_client_ids:
+        _recompute_client_free_sessions(database, cid)
     database.commit()
     return {"message": "Deleted", "id": sesija_id}
 
@@ -2606,34 +2697,30 @@ def get_all_grupa(
 ):
     grupa_list = database.query(Grupa).filter(Grupa.tenant_id == tenant_id).all()
 
+    memberships = database.query(GrupaKlijent).filter(GrupaKlijent.tenant_id == tenant_id).all()
+
     if not detailed:
+        member_counts = Counter(gk.grupa_id for gk in memberships)
         result = []
         for g in grupa_list:
-            item = g.__dict__.copy()
-            item.pop('_sa_instance_state', None)
-            member_count = database.query(GrupaKlijent).filter(GrupaKlijent.grupa_id == g.id, GrupaKlijent.tenant_id == tenant_id).count()
-            item["broj_clanova"] = member_count
+            item = _row_dict(g)
+            item["broj_clanova"] = member_counts.get(g.id, 0)
             result.append(item)
         return result
 
+    sg_by = _group_rows(database.query(SesijaGrupa).filter(SesijaGrupa.tenant_id == tenant_id).all(), "grupa_id")
+    klijenti = {k.id: k for k in database.query(Klijent).filter(Klijent.tenant_id == tenant_id).all()}
+    members_by = {}
+    for gk in memberships:
+        klijent = klijenti.get(gk.klijent_id)
+        if klijent:
+            members_by.setdefault(gk.grupa_id, []).append(_row_dict(klijent))
+
     result = []
     for grupa_item in grupa_list:
-        item_dict = grupa_item.__dict__.copy()
-        item_dict.pop('_sa_instance_state', None)
-
-        sesijagrupa_list = database.query(SesijaGrupa).filter(SesijaGrupa.grupa_id == grupa_item.id, SesijaGrupa.tenant_id == tenant_id).all()
-        item_dict["sesijagrupa"] = [{k: v for k, v in x.__dict__.items() if k != "_sa_instance_state"} for x in sesijagrupa_list]
-
-        gk_list = database.query(GrupaKlijent).filter(GrupaKlijent.grupa_id == grupa_item.id, GrupaKlijent.tenant_id == tenant_id).all()
-        clanovi = []
-        for gk in gk_list:
-            klijent = database.query(Klijent).filter(Klijent.id == gk.klijent_id, Klijent.tenant_id == tenant_id).first()
-            if klijent:
-                kd = klijent.__dict__.copy()
-                kd.pop("_sa_instance_state", None)
-                clanovi.append(kd)
-
-        item_dict["clanovi"] = clanovi
+        item_dict = _row_dict(grupa_item)
+        item_dict["sesijagrupa"] = sg_by.get(grupa_item.id, [])
+        item_dict["clanovi"] = members_by.get(grupa_item.id, [])
         result.append(item_dict)
 
     return result
@@ -2717,6 +2804,17 @@ def delete_grupa(
     if not db_grupa:
         raise HTTPException(status_code=404, detail="Grupa not found")
 
+    # Sessions that belonged only to this group go with it; sessions that
+    # also have individual clients just lose the group link.
+    group_session_ids = [
+        l.sesija_1_id for l in database.query(SesijaGrupa).filter(SesijaGrupa.grupa_id == grupa_id).all()
+    ]
+    database.query(SesijaGrupa).filter(SesijaGrupa.grupa_id == grupa_id).delete(synchronize_session=False)
+    database.flush()
+    for sid in group_session_ids:
+        sesija = database.query(Sesija).filter(Sesija.id == sid, Sesija.tenant_id == tenant_id).first()
+        if sesija and not _session_has_other_participants(database, sid):
+            _delete_sesija_with_links(database, sesija)
     database.query(GrupaKlijent).filter(GrupaKlijent.grupa_id == grupa_id, GrupaKlijent.tenant_id == tenant_id).delete()
     database.delete(db_grupa)
     database.commit()
@@ -2738,17 +2836,14 @@ def get_all_klijent(
     if not detailed:
         return klijent_list
 
+    sk_by = _group_rows(database.query(SesijaKlijent).filter(SesijaKlijent.tenant_id == tenant_id).all(), "klijent_id")
+    cena_by = _group_rows(database.query(Cena).filter(Cena.tenant_id == tenant_id).all(), "klijent_1_id")
+
     result = []
     for klijent_item in klijent_list:
-        item_dict = klijent_item.__dict__.copy()
-        item_dict.pop('_sa_instance_state', None)
-
-        sesijaklijent_list = database.query(SesijaKlijent).filter(SesijaKlijent.klijent_id == klijent_item.id, SesijaKlijent.tenant_id == tenant_id).all()
-        item_dict["sesijaklijent"] = [{k: v for k, v in x.__dict__.items() if k != "_sa_instance_state"} for x in sesijaklijent_list]
-
-        cena_list = database.query(Cena).filter(Cena.klijent_1_id == klijent_item.id, Cena.tenant_id == tenant_id).all()
-        item_dict["cena_1"] = [{k: v for k, v in x.__dict__.items() if k != "_sa_instance_state"} for x in cena_list]
-
+        item_dict = _row_dict(klijent_item)
+        item_dict["sesijaklijent"] = sk_by.get(klijent_item.id, [])
+        item_dict["cena_1"] = cena_by.get(klijent_item.id, [])
         result.append(item_dict)
 
     return result
@@ -2854,7 +2949,7 @@ def bulk_delete_klijent(
     for item_id in ids:
         obj = database.query(Klijent).filter(Klijent.id == item_id, Klijent.tenant_id == tenant_id).first()
         if obj:
-            database.delete(obj)
+            _delete_klijent_with_links(database, obj)
             deleted += 1
     database.commit()
     return {"deleted_count": deleted}
@@ -2890,7 +2985,7 @@ def delete_klijent(
     db_klijent = database.query(Klijent).filter(Klijent.id == klijent_id, Klijent.tenant_id == tenant_id).first()
     if not db_klijent:
         raise HTTPException(status_code=404, detail="Klijent not found")
-    database.delete(db_klijent)
+    _delete_klijent_with_links(database, db_klijent)
     database.commit()
     return {"message": "Deleted", "id": klijent_id}
 
@@ -3941,14 +4036,20 @@ def list_team_members(
 ############################################
 
 def get_client_id(request: Request) -> int:
-    """Resolve the calling client account from the X-Client-ID header,
-    mirroring get_tenant_id's trust model for the therapist side."""
-    client_id = request.headers.get("X-Client-ID")
-
-    if not client_id:
-        raise HTTPException(status_code=400, detail="Client ID missing")
-
-    return int(client_id)
+    """Resolve the calling client account from their verified login token.
+    The X-Client-ID header is not trusted - it's just a number anyone
+    could change to see or cancel someone else's appointments."""
+    supabase_user_id = get_verified_supabase_user_id(request)
+    database = SessionLocal()
+    try:
+        account = database.query(ClientAccount).filter(
+            ClientAccount.supabase_user_id == supabase_user_id
+        ).first()
+        if not account:
+            raise HTTPException(status_code=401, detail="No client account for this login")
+        return account.id
+    finally:
+        database.close()
 
 
 class ClientProfileRequest(PydanticBaseModel):
@@ -3961,10 +4062,18 @@ class ClientProfileRequest(PydanticBaseModel):
 @app.post("/client-auth/profile", tags=["ClientAuth"])
 def get_or_create_client_profile(
         data: ClientProfileRequest,
+        request: Request,
         database: Session = Depends(get_db)
 ):
     """Find-or-create a ClientAccount for the logged-in Supabase user -
-    mirrors /auth/login-profile's shape for the therapist side."""
+    mirrors /auth/login-profile's shape for the therapist side. The
+    account id and email come from the verified login token, never from
+    the request body (the email decides whose appointments are shown)."""
+    claims = get_verified_supabase_claims(request)
+    data.supabase_user_id = claims["sub"]
+    if not claims.get("email"):
+        raise HTTPException(status_code=401, detail="Login has no email")
+    data.email = claims["email"]
     account = database.query(ClientAccount).filter(
         ClientAccount.supabase_user_id == data.supabase_user_id
     ).first()
@@ -4300,6 +4409,13 @@ def _recompute_client_free_sessions(db: Session, klijent_id: int):
         s.is_free = idx < FREE_SESSIONS_COUNT
 
 
+def _admin_session_load_options():
+    return (
+        selectinload(Sesija.sesijaklijent_1).joinedload(SesijaKlijent.klijent).joinedload(Klijent.therapist),
+        joinedload(Sesija.therapist),
+    )
+
+
 def _sesija_effective_therapist_id(s: "Sesija") -> Optional[int]:
     """A session's attributed therapist: its own therapist_id if set,
     otherwise inherited from its client's assigned therapist. Historical
@@ -4335,10 +4451,32 @@ def _fetch_admin_base_data(db: Session):
     """The admin area is intentionally global/cross-tenant (by design -
     every client, therapist and session in the whole application, not
     just the calling admin's own tenant), so these are unfiltered."""
-    clients = db.query(Klijent).all()
-    sessions = db.query(Sesija).all()
-    for s in sessions:
-        s.effective_therapist_id = _sesija_effective_therapist_id(s)
+    # Only the columns the stats need, as plain rows: building full ORM
+    # objects for every client/session in the app was the slow part.
+    clients = db.query(
+        Klijent.id, Klijent.therapist_id, Klijent.status, Klijent.gender,
+        Klijent.date_started, Klijent.created_at,
+    ).all()
+
+    # A session's therapist is its own therapist_id, else its (first)
+    # client's assigned therapist - same rule as _sesija_effective_therapist_id,
+    # done in one query instead of two lookups per session.
+    first_client = (
+        db.query(SesijaKlijent.sesija_id.label("sesija_id"), func.min(SesijaKlijent.klijent_id).label("klijent_id"))
+        .group_by(SesijaKlijent.sesija_id)
+        .subquery()
+    )
+    sessions = (
+        db.query(
+            Sesija.id,
+            Sesija.pocetak,
+            Sesija.is_free,
+            func.coalesce(Sesija.therapist_id, Klijent.therapist_id).label("effective_therapist_id"),
+        )
+        .outerjoin(first_client, first_client.c.sesija_id == Sesija.id)
+        .outerjoin(Klijent, Klijent.id == first_client.c.klijent_id)
+        .all()
+    )
     return clients, sessions
 
 
@@ -4380,9 +4518,22 @@ def _sesija_admin_payload(s: "Sesija", session_number: Optional[int] = None) -> 
     }
 
 
-def _therapist_stats_from(therapist: "UserProfile", clients_all, sessions_all, start_date, end_date) -> dict:
-    my_clients = [c for c in clients_all if c.therapist_id == therapist.id]
-    my_sessions = [s for s in sessions_all if s.effective_therapist_id == therapist.id]
+def _all_therapist_stats(therapists, clients_all, sessions_all, start_date, end_date) -> list:
+    """Stats for every therapist, grouping clients/sessions by therapist in
+    one pass - instead of re-scanning all data once per therapist."""
+    clients_by = {}
+    for c in clients_all:
+        clients_by.setdefault(c.therapist_id, []).append(c)
+    sessions_by = {}
+    for s in sessions_all:
+        sessions_by.setdefault(s.effective_therapist_id, []).append(s)
+    return [
+        _therapist_stats_from(t, clients_by.get(t.id, []), sessions_by.get(t.id, []), start_date, end_date)
+        for t in therapists
+    ]
+
+
+def _therapist_stats_from(therapist: "UserProfile", my_clients, my_sessions, start_date, end_date) -> dict:
     clients_in_range = [c for c in my_clients if _in_range(_effective_client_date(c), start_date, end_date)]
     sessions_in_range = [s for s in my_sessions if _in_range(s.pocetak.date(), start_date, end_date)]
     return {
@@ -4500,7 +4651,7 @@ def admin_list_therapists(
 ):
     therapists = database.query(UserProfile).order_by(UserProfile.created_at).all()
     clients_all, sessions_all = _fetch_admin_base_data(database)
-    rows = [_therapist_stats_from(t, clients_all, sessions_all, start_date, end_date) for t in therapists]
+    rows = _all_therapist_stats(therapists, clients_all, sessions_all, start_date, end_date)
 
     client_ranks = _rank_map([(r["user_id"], r["clients_in_range"]) for r in rows])
     session_ranks = _rank_map([(r["user_id"], r["sessions_in_range"]) for r in rows])
@@ -4541,7 +4692,7 @@ def admin_get_therapist(
 
     all_therapists = database.query(UserProfile).all()
     clients_all, sessions_all = _fetch_admin_base_data(database)
-    all_rows = [_therapist_stats_from(t, clients_all, sessions_all, start_date, end_date) for t in all_therapists]
+    all_rows = _all_therapist_stats(all_therapists, clients_all, sessions_all, start_date, end_date)
 
     client_ranks = _rank_map([(r["user_id"], r["clients_in_range"]) for r in all_rows])
     session_ranks = _rank_map([(r["user_id"], r["sessions_in_range"]) for r in all_rows])
@@ -4557,7 +4708,7 @@ def admin_get_therapist(
     clients = database.query(Klijent).filter(Klijent.therapist_id == user_id).order_by(Klijent.created_at.desc()).all()
     inherited_session_ids = _session_ids_via_therapist_clients(database, user_id)
     sessions = (
-        database.query(Sesija)
+        database.query(Sesija).options(*_admin_session_load_options())
         .filter(or_(Sesija.therapist_id == user_id, Sesija.id.in_(inherited_session_ids or [-1])))
         .order_by(Sesija.pocetak.desc()).limit(200).all()
     )
@@ -4861,7 +5012,7 @@ def admin_list_clients(
     page = max(1, page)
     page_size = max(1, min(page_size, 200))
 
-    query = database.query(Klijent)
+    query = database.query(Klijent).options(joinedload(Klijent.therapist))
     if therapist_id is not None:
         query = query.filter(Klijent.therapist_id == therapist_id)
     if status:
@@ -4955,7 +5106,7 @@ def admin_get_client(
         ).all()
     ]
     sessions = (
-        database.query(Sesija).filter(Sesija.id.in_(sesija_ids))
+        database.query(Sesija).options(*_admin_session_load_options()).filter(Sesija.id.in_(sesija_ids))
         .order_by(Sesija.pocetak.asc()).all()
         if sesija_ids else []
     )
@@ -5039,7 +5190,7 @@ def admin_list_sessions(
     page = max(1, page)
     page_size = max(1, min(page_size, 200))
 
-    query = database.query(Sesija)
+    query = database.query(Sesija).options(*_admin_session_load_options())
     if therapist_id is not None:
         inherited_ids = _session_ids_via_therapist_clients(database, therapist_id)
         query = query.filter(or_(Sesija.therapist_id == therapist_id, Sesija.id.in_(inherited_ids or [-1])))
