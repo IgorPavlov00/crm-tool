@@ -212,8 +212,8 @@ def run_light_migrations(engine):
 # First supervision dates every therapist should see. Only seeded while the
 # table is still empty, so events the admin later edits/deletes stay that way.
 DEFAULT_SUPERVISION_EVENTS = [
-    datetime(2026, 10, 30, 18, 0),
-    datetime(2026, 11, 30, 18, 0),
+    (datetime(2026, 10, 30, 18, 0), "Prva grupa supervizije"),
+    (datetime(2026, 11, 30, 18, 0), "Druga grupa supervizije"),
 ]
 
 
@@ -221,9 +221,17 @@ def seed_default_supervision_events(session_factory):
     db = session_factory()
     try:
         if db.query(SupervisionEvent).first() is None:
-            for starts_at in DEFAULT_SUPERVISION_EVENTS:
-                db.add(SupervisionEvent(title="Supervizija", type="supervizija", starts_at=starts_at))
-            db.commit()
+            for starts_at, title in DEFAULT_SUPERVISION_EVENTS:
+                db.add(SupervisionEvent(title=title, type="supervizija", starts_at=starts_at))
+        else:
+            # Rename the default events if they were seeded under the old
+            # generic "Supervizija" title (and the admin hasn't renamed them).
+            for starts_at, title in DEFAULT_SUPERVISION_EVENTS:
+                db.query(SupervisionEvent).filter(
+                    SupervisionEvent.starts_at == starts_at,
+                    SupervisionEvent.title == "Supervizija",
+                ).update({"title": title})
+        db.commit()
     except SQLAlchemyError:
         db.rollback()
     finally:

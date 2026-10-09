@@ -901,11 +901,11 @@ def test_admin_can_approve_pending_therapist_and_email_is_sent(seeded, monkeypat
 def test_default_supervision_events_are_seeded():
     db = SessionLocal()
     try:
-        starts = {e.starts_at for e in db.query(main_api.SupervisionEvent).all()}
+        titles = {e.starts_at: e.title for e in db.query(main_api.SupervisionEvent).all()}
     finally:
         db.close()
-    assert datetime(2026, 10, 30, 18, 0) in starts
-    assert datetime(2026, 11, 30, 18, 0) in starts
+    assert titles[datetime(2026, 10, 30, 18, 0)] == "Prva grupa supervizije"
+    assert titles[datetime(2026, 11, 30, 18, 0)] == "Druga grupa supervizije"
 
 
 def test_supervision_admin_creates_event_therapists_sign_up_and_admin_sees_stats(seeded):
