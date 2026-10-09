@@ -636,12 +636,15 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 
 
 def has_active_subscription(tenant: "Tenant", now: datetime | None = None) -> bool:
-    now = now or datetime.utcnow()
-    if tenant.trial_ends_at and now < tenant.trial_ends_at:
-        return True
-    if tenant.subscription_paid_until and now < tenant.subscription_paid_until:
-        return True
-    return False
+    # Trial/paywall temporarily disabled - every tenant has full access until
+    # billing is implemented. Restore the checks below to re-enable it.
+    return True
+    # now = now or datetime.utcnow()
+    # if tenant.trial_ends_at and now < tenant.trial_ends_at:
+    #     return True
+    # if tenant.subscription_paid_until and now < tenant.subscription_paid_until:
+    #     return True
+    # return False
 
 
 def require_active_subscription(
