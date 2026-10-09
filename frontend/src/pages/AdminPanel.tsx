@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { TableBlock } from "../components/runtime/TableBlock";
 import Dashboard from "./Dashboard";
-import TeamPanel from "./TeamPanel";
+import ClientProfileSettings from "../components/ClientProfileSettings";
 import { useAuth } from "../contexts/AuthContext";
 // const tenantId = localStorage.getItem("tenant_id");
 const tabs: {
@@ -74,26 +74,6 @@ const tabs: {
     ),
   },
   {
-    key: "cena",
-    label: "Uplate",
-    mobileLabel: "Uplate",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <line x1="12" y1="1" x2="12" y2="23" />
-        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-      </svg>
-    ),
-  },
-  {
     key: "statistika",
     label: "Statistika",
     mobileLabel: "Stats",
@@ -115,9 +95,9 @@ const tabs: {
     ),
   },
   {
-    key: "tim",
-    label: "Tim",
-    mobileLabel: "Tim",
+    key: "profil",
+    label: "Profil",
+    mobileLabel: "Profil",
     ownerOnly: true,
     icon: (
       <svg
@@ -130,10 +110,8 @@ const tabs: {
         strokeLinecap="round"
         strokeLinejoin="round"
       >
-        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-        <circle cx="9" cy="7" r="4" />
-        <line x1="19" y1="8" x2="19" y2="14" />
-        <line x1="22" y1="11" x2="16" y2="11" />
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
       </svg>
     ),
   },
@@ -223,6 +201,7 @@ const tableConfigs: Record<string, any> = {
       showPagination: true,
       rowsPerPage: 10,
       actionButtons: true,
+      showAddButton: false,
       showPaymentButton: true,
       showExportButton: true,
       columns: [
@@ -390,103 +369,6 @@ const tableConfigs: Record<string, any> = {
       ],
     },
   },
-  cena: {
-    title: "Lista Uplata",
-    entity: "Cena",
-    endpoint: "/cena/",
-    options: {
-      showHeader: true,
-      stripedRows: false,
-      showPagination: true,
-      rowsPerPage: 10,
-      actionButtons: true,
-      columns: [
-        {
-          label: "ID",
-          column_type: "field",
-          field: "id",
-          type: "int",
-          required: true,
-        },
-        {
-          label: "Cena",
-          column_type: "field",
-          field: "cena",
-          type: "float",
-          required: true,
-        },
-        {
-          label: "Datum Uplate",
-          column_type: "field",
-          field: "datum_uplate",
-          type: "date",
-          required: true,
-        },
-        {
-          label: "Način Plaćanja",
-          column_type: "field",
-          field: "nacin_placanja",
-          type: "str",
-          required: true,
-        },
-        {
-          label: "Status",
-          column_type: "field",
-          field: "status",
-          type: "str",
-          required: true,
-        },
-      ],
-      formColumns: [
-        {
-          column_type: "field",
-          field: "cena",
-          label: "Cena (RSD)",
-          type: "float",
-          required: true,
-        },
-        {
-          column_type: "field",
-          field: "datum_uplate",
-          label: "Datum Uplate",
-          type: "date",
-          required: true,
-        },
-        {
-          column_type: "field",
-          field: "nacin_placanja",
-          label: "Način Plaćanja",
-          type: "str",
-          required: true,
-        },
-        {
-          column_type: "field",
-          field: "status",
-          label: "Status",
-          type: "str",
-          required: true,
-        },
-        {
-          column_type: "lookup",
-          path: "sesija_2",
-          field: "sesija_2",
-          lookup_field: "id",
-          entity: "Sesija",
-          type: "int",
-          required: true,
-        },
-        {
-          column_type: "lookup",
-          path: "klijent_1",
-          field: "klijent_1",
-          lookup_field: "id",
-          entity: "Klijent",
-          type: "int",
-          required: true,
-        },
-      ],
-    },
-  },
 };
 
 const AdminPanel: React.FC = () => {
@@ -513,7 +395,7 @@ const AdminPanel: React.FC = () => {
         <div className="admin-header-text">
           <h1 className="admin-title">Admin Panel</h1>
           <p className="admin-subtitle">
-            Upravljajte klijentima, sesijama, grupama i uplatama
+            Upravljajte klijentima, sesijama i grupama
           </p>
         </div>
         <div className="admin-header-badge">
@@ -542,8 +424,8 @@ const AdminPanel: React.FC = () => {
       >
         {activeTab === "statistika" ? (
           <Dashboard />
-        ) : activeTab === "tim" ? (
-          <TeamPanel />
+        ) : activeTab === "profil" ? (
+          <ClientProfileSettings />
         ) : config ? (
           <TableBlock
             key={activeTab}

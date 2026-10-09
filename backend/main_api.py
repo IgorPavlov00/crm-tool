@@ -4679,7 +4679,8 @@ def admin_approve_therapist(
 
 # Bulk-inviting therapists: creates their Supabase login (without a
 # password), a ready-to-use approved profile with its own practice, and
-# emails them a link that lands on the "Postavite lozinku" screen.
+# emails them a link that signs them straight into the app. Later logins
+# use the passwordless email link on the login screen.
 # Needs SUPABASE_SERVICE_ROLE_KEY (Supabase -> Project Settings -> API).
 SUPABASE_SERVICE_ROLE_KEY = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip() or None
 THERAPIST_APP_URL = os.getenv("THERAPIST_APP_URL", "https://crm-tool-frontend-e885b1.onrender.com/therapist")
@@ -4746,8 +4747,9 @@ def send_therapist_invite_email(email: str, full_name: Optional[str], action_lin
 <div style="background:#fff;border-radius:16px;padding:28px 24px 24px;margin-bottom:8px;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
 <div style="font-size:22px;margin-bottom:8px;">👋 Dobrodošli u PsihoApp</div>
 <div style="font-size:15px;color:#1a1a1a;margin-bottom:4px;">Poštovani/a <strong>{name}</strong>,</div>
-<div style="font-size:15px;color:#1a1a1a;margin-bottom:20px;">Za Vas je otvoren nalog u PsihoApp aplikaciji. Kliknite na dugme ispod, postavite lozinku i nalog je spreman za korišćenje.</div>
-<a href="{action_link}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;font-weight:600;font-size:15px;padding:12px 22px;border-radius:10px;">Aktiviraj nalog</a>
+<div style="font-size:15px;color:#1a1a1a;margin-bottom:10px;">Za Vas je otvoren nalog u PsihoApp aplikaciji. Kliknite na dugme ispod da potvrdite nalog - bićete automatski prijavljeni.</div>
+<div style="font-size:14px;color:#4b5563;margin-bottom:20px;">Ubuduće se prijavljujete samo unosom svog email-a: na stranici za prijavu kliknite „Pošalji link za prijavu“ i otvorite link iz mejla. Lozinka nije potrebna.</div>
+<a href="{action_link}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;font-weight:600;font-size:15px;padding:12px 22px;border-radius:10px;">Potvrdi nalog i prijavi se</a>
 <div style="font-size:12px;color:#9ca3af;margin-top:18px;">Ako dugme ne radi, kopirajte ovaj link u pregledač:<br>{action_link}</div>
 </div>
 <div style="text-align:center;font-size:13px;color:#9ca3af;margin-top:14px;line-height:1.5;">
@@ -4760,7 +4762,7 @@ def send_therapist_invite_email(email: str, full_name: Optional[str], action_lin
         resend.Emails.send({
             "from": "PsihoApp <noreply@hrioapp.com>",
             "to": [email],
-            "subject": "Vaš PsihoApp nalog je spreman - postavite lozinku",
+            "subject": "Vaš PsihoApp nalog je spreman - potvrdite i prijavite se",
             "html": html,
         })
         return True

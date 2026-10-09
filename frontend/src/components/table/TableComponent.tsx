@@ -31,6 +31,8 @@ interface TableOptions {
   showPaymentButton?: boolean;
   showExportButton?: boolean;
   showNotesButton?: boolean;
+  // Hides only the "add" button; row edit/delete stay (actionButtons).
+  showAddButton?: boolean;
   columns?: Array<
     | {
         field: string;
@@ -237,6 +239,7 @@ export const TableComponent: React.FC<Props> = ({
     showPaymentButton: (options as any)?.showPaymentButton ?? false,
     showExportButton: (options as any)?.showExportButton ?? false,
     showNotesButton: (options as any)?.showNotesButton ?? false,
+    showAddButton: (options as any)?.showAddButton ?? true,
     columns: options?.columns ?? [],
     formColumns:
       (options as any)?.formColumns ?? (options as any)?.form_columns ?? [],
@@ -1427,7 +1430,7 @@ export const TableComponent: React.FC<Props> = ({
           )}
 
           {/* Add button */}
-          {resolvedOptions.actionButtons && (
+          {resolvedOptions.actionButtons && resolvedOptions.showAddButton && (
             <button
               className="table-add-btn"
               style={{

@@ -71,7 +71,7 @@ const BulkInviteModal: React.FC<{ onClose: () => void; onDone: () => void }> = (
           <>
             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 12px" }}>
               Poslato pozivnica: <strong>{invitedCount}</strong> od {results.length}. Pozvani terapeuti su već odobreni
-              i dobiće email sa linkom da postave lozinku.
+              i dobiće email sa linkom kojim se automatski prijavljuju.
             </p>
             <div className="mhc-table-wrap" style={{ maxHeight: 380, overflowY: "auto" }}>
               <table className="mhc-table">
@@ -128,7 +128,7 @@ const BulkInviteModal: React.FC<{ onClose: () => void; onDone: () => void }> = (
           <>
             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 12px" }}>
               Nalepite listu, npr. <code>Ime Prezime &lt;email@primer.com&gt;</code>, odvojeno zarezom ili novim redom.
-              Svako dobija email sa linkom da postavi lozinku, a nalog je odmah odobren.
+              Svako dobija email sa linkom kojim potvrđuje nalog i automatski se prijavljuje, a nalog je odmah odobren.
             </p>
             <textarea
               className="mhc-input"

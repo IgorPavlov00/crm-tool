@@ -5,7 +5,7 @@ import React, {
   useState,
   useCallback,
 } from "react";
-import { supabase, INVITE_PASSWORD_PENDING_KEY } from "../lib/supabase";
+import { supabase } from "../lib/supabase";
 import axios from "axios";
 import type { User, Session } from "@supabase/supabase-js";
 
@@ -44,6 +44,7 @@ interface AuthContextType {
     password: string,
   ) => Promise<{ error?: string; needsProfile?: boolean }>;
   signInWithGoogle: () => Promise<void>;
+  signInWithEmailLink: (email: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error?: string }>;
   updatePassword: (newPassword: string) => Promise<{ error?: string }>;
@@ -77,24 +78,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   // True right after following a password-reset email link - the app must
   // show a "set new password" screen instead of proceeding straight into
   // the normal app, even though Supabase already has a (recovery) session.
-  // Also true right after following an emailed account invitation (see
-  // lib/supabase.ts) - those accounts have no password yet.
-  const [passwordRecoveryPending, setPasswordRecoveryPending] = useState(() => {
-    try {
-      return sessionStorage.getItem(INVITE_PASSWORD_PENDING_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [passwordRecoveryPending, setPasswordRecoveryPending] = useState(false);
 
-  const clearPasswordRecovery = () => {
-    try {
-      sessionStorage.removeItem(INVITE_PASSWORD_PENDING_KEY);
-    } catch {
-      /* ignore */
-    }
-    setPasswordRecoveryPending(false);
-  };
+  const clearPasswordRecovery = () => setPasswordRecoveryPending(false);
 
   const backendBase = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -373,6 +359,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     return {};
   };
 
+  // Passwordless login: emails a one-time link that signs the person in
+  // directly. Only for existing accounts - never creates new ones.
+  const signInWithEmailLink = async (email: string): Promise<{ error?: string }> => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: `${window.location.origin}/therapist`,
+      },
+    });
+    if (error) {
+      if (/signups not allowed|not found|not allowed for otp/i.test(error.message)) {
+        return { error: "Ne postoji nalog sa ovim email-om." };
+      }
+      return { error: error.message };
+    }
+    return {};
+  };
+
   const signInWithGoogle = async () => {
     const inviteToken = sessionStorage.getItem(INVITE_STORAGE_KEY);
     const redirectTo = inviteToken
@@ -433,7 +438,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const signOut = async () => {
     await supabase.auth.signOut();
-    clearPasswordRecovery();
     setUser(null);
     setSession(null);
     setProfile(null);
@@ -452,6 +456,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         signUp,
         signIn,
         signInWithGoogle,
+        signInWithEmailLink,
         signOut,
         resetPassword,
         updatePassword,
