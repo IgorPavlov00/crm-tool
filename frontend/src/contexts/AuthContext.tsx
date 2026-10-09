@@ -5,7 +5,7 @@ import React, {
   useState,
   useCallback,
 } from "react";
-import { supabase } from "../lib/supabase";
+import { supabase, INVITE_PASSWORD_PENDING_KEY } from "../lib/supabase";
 import axios from "axios";
 import type { User, Session } from "@supabase/supabase-js";
 
@@ -77,7 +77,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   // True right after following a password-reset email link - the app must
   // show a "set new password" screen instead of proceeding straight into
   // the normal app, even though Supabase already has a (recovery) session.
-  const [passwordRecoveryPending, setPasswordRecoveryPending] = useState(false);
+  // Also true right after following an emailed account invitation (see
+  // lib/supabase.ts) - those accounts have no password yet.
+  const [passwordRecoveryPending, setPasswordRecoveryPending] = useState(() => {
+    try {
+      return sessionStorage.getItem(INVITE_PASSWORD_PENDING_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const clearPasswordRecovery = () => {
+    try {
+      sessionStorage.removeItem(INVITE_PASSWORD_PENDING_KEY);
+    } catch {
+      /* ignore */
+    }
+    setPasswordRecoveryPending(false);
+  };
 
   const backendBase = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -416,6 +433,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    clearPasswordRecovery();
     setUser(null);
     setSession(null);
     setProfile(null);
@@ -438,7 +456,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         resetPassword,
         updatePassword,
         passwordRecoveryPending,
-        clearPasswordRecovery: () => setPasswordRecoveryPending(false),
+        clearPasswordRecovery,
         createProfile,
         clearInvite,
       }}

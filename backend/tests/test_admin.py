@@ -964,3 +964,62 @@ def test_cannot_sign_up_for_past_supervision_event(seeded):
     ).json()["id"]
     resp = client.post(f"/supervision/events/{event_id}/signup", headers=auth_headers("member-sub"))
     assert resp.status_code == 400
+
+
+def test_admin_bulk_invite_creates_approved_profiles_and_emails_links(seeded, monkeypatch):
+    sent_emails = []
+    monkeypatch.setattr(main_api.resend.Emails, "send", lambda payload: sent_emails.append(payload))
+    monkeypatch.setattr(main_api, "SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(main_api, "SUPABASE_SERVICE_ROLE_KEY", "service-key")
+
+    def fake_generate(email, full_name):
+        if email == "has-login@example.com":
+            raise main_api.SupabaseUserExists()
+        return f"sb-{email}", f"https://example.supabase.co/verify?token=abc&email={email}"
+
+    monkeypatch.setattr(main_api, "_supabase_generate_invite_link", fake_generate)
+
+    payload = {"invites": [
+        {"email": "New.Therapist@Example.com", "full_name": "Nova Terapeutkinja"},
+        {"email": "new.therapist@example.com", "full_name": "Duplicate In List"},
+        {"email": "member@example.com", "full_name": "Already Here"},
+        {"email": "has-login@example.com"},
+        {"email": "not-an-email"},
+    ]}
+
+    assert client.post("/admin/therapists/invite", json=payload, headers=auth_headers("member-sub")).status_code == 403
+
+    resp = client.post("/admin/therapists/invite", json=payload, headers=auth_headers("owner-sub"))
+    assert resp.status_code == 200
+    statuses = {r["email"]: r["status"] for r in resp.json()["results"]}
+    assert statuses == {
+        "new.therapist@example.com": "invited",
+        "member@example.com": "already_exists",
+        "has-login@example.com": "already_has_login",
+        "not-an-email": "invalid",
+    }
+
+    assert len(sent_emails) == 1
+    assert sent_emails[0]["to"] == ["new.therapist@example.com"]
+    assert "verify?token=abc" in sent_emails[0]["html"]
+
+    db = SessionLocal()
+    try:
+        profile = db.query(UserProfile).filter(UserProfile.email == "new.therapist@example.com").one()
+        assert profile.is_approved is True and profile.is_admin is False
+        assert profile.supabase_user_id == "sb-new.therapist@example.com"
+        assert db.query(Tenant).filter(Tenant.id == profile.tenant_id).one().name == "Nova Terapeutkinja"
+    finally:
+        db.close()
+
+    # Re-running the same list doesn't create duplicates.
+    again = client.post("/admin/therapists/invite", json=payload, headers=auth_headers("owner-sub")).json()
+    assert {r["email"]: r["status"] for r in again["results"]}["new.therapist@example.com"] == "already_exists"
+
+
+def test_bulk_invite_reports_missing_configuration(seeded, monkeypatch):
+    monkeypatch.setattr(main_api, "SUPABASE_SERVICE_ROLE_KEY", None)
+    resp = client.post("/admin/therapists/invite", json={"invites": [{"email": "x@example.com"}]},
+                       headers=auth_headers("owner-sub"))
+    assert resp.status_code == 500
+    assert "SUPABASE_SERVICE_ROLE_KEY" in resp.json()["message"]

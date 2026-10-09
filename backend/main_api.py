@@ -8,7 +8,7 @@ from collections import Counter
 from fastapi import Depends, FastAPI, HTTPException, Request, status, Body, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import create_engine, text, or_
+from sqlalchemy import create_engine, text, or_, func
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, ProgrammingError
 from pydantic_classes import *
@@ -4675,6 +4675,158 @@ def admin_approve_therapist(
         "email": therapist.email,
         "is_approved": therapist.is_approved,
     }
+
+
+# Bulk-inviting therapists: creates their Supabase login (without a
+# password), a ready-to-use approved profile with its own practice, and
+# emails them a link that lands on the "Postavite lozinku" screen.
+# Needs SUPABASE_SERVICE_ROLE_KEY (Supabase -> Project Settings -> API).
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+THERAPIST_APP_URL = os.getenv("THERAPIST_APP_URL", "https://crm-tool-frontend-e885b1.onrender.com/therapist")
+
+
+class TherapistInviteEntry(BaseModel):
+    email: str
+    full_name: Optional[str] = None
+
+
+class TherapistBulkInvite(BaseModel):
+    invites: List[TherapistInviteEntry]
+
+
+class SupabaseUserExists(Exception):
+    pass
+
+
+def _supabase_generate_invite_link(email: str, full_name: Optional[str]) -> tuple:
+    """Creates the Supabase auth user and returns (supabase_user_id,
+    action_link) without Supabase sending any email itself - we send it
+    via Resend, which avoids Supabase's very low built-in email limits."""
+    import httpx
+
+    resp = httpx.post(
+        f"{SUPABASE_URL}/auth/v1/admin/generate_link",
+        headers={
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        },
+        json={
+            "type": "invite",
+            "email": email,
+            "data": {"full_name": full_name} if full_name else {},
+            "redirect_to": THERAPIST_APP_URL,
+        },
+        timeout=20,
+    )
+    if resp.status_code == 422 and "exist" in resp.text.lower():
+        raise SupabaseUserExists()
+    resp.raise_for_status()
+    body = resp.json()
+    user_id = body.get("id") or (body.get("user") or {}).get("id")
+    action_link = body.get("action_link") or (body.get("properties") or {}).get("action_link")
+    if not user_id or not action_link:
+        raise RuntimeError("Unexpected Supabase response")
+    return user_id, action_link
+
+
+def send_therapist_invite_email(email: str, full_name: Optional[str], action_link: str) -> bool:
+    name = full_name or email
+    html = f"""
+<div style="background:#f2f2f7;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;color:#1a1a1a;">
+<div style="max-width:520px;margin:auto;">
+<div style="background:#fff;border-radius:16px;padding:28px 24px 24px;margin-bottom:8px;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+<div style="font-size:22px;margin-bottom:8px;">👋 Dobrodošli u PsihoApp</div>
+<div style="font-size:15px;color:#1a1a1a;margin-bottom:4px;">Poštovani/a <strong>{name}</strong>,</div>
+<div style="font-size:15px;color:#1a1a1a;margin-bottom:20px;">Za Vas je otvoren nalog u PsihoApp aplikaciji. Kliknite na dugme ispod, postavite lozinku i nalog je spreman za korišćenje.</div>
+<a href="{action_link}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;font-weight:600;font-size:15px;padding:12px 22px;border-radius:10px;">Aktiviraj nalog</a>
+<div style="font-size:12px;color:#9ca3af;margin-top:18px;">Ako dugme ne radi, kopirajte ovaj link u pregledač:<br>{action_link}</div>
+</div>
+<div style="text-align:center;font-size:13px;color:#9ca3af;margin-top:14px;line-height:1.5;">
+<strong style="color:#6b7280;">PsihoApp</strong>
+</div>
+</div>
+</div>
+"""
+    try:
+        resend.Emails.send({
+            "from": "PsihoApp <noreply@hrioapp.com>",
+            "to": [email],
+            "subject": "Vaš PsihoApp nalog je spreman - postavite lozinku",
+            "html": html,
+        })
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send invite email to {email}: {e}")
+        return False
+
+
+@app.post("/admin/therapists/invite", tags=["Admin"])
+def admin_invite_therapists(
+        data: TherapistBulkInvite,
+        admin: UserProfile = Depends(require_admin),
+        database: Session = Depends(get_db),
+):
+    """Creates accounts for a pasted list of therapists. Per-person result
+    statuses: invited | already_exists | already_has_login | email_failed |
+    invalid | error. Safe to re-run with the same list."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Pozivanje nije podešeno: na serveru nedostaje SUPABASE_URL ili SUPABASE_SERVICE_ROLE_KEY.",
+        )
+
+    results = []
+    seen = set()
+    for entry in data.invites:
+        email = (entry.email or "").strip().lower()
+        full_name = (entry.full_name or "").strip() or None
+        if not email or "@" not in email or email in seen:
+            if email not in seen:
+                results.append({"email": email, "full_name": full_name, "status": "invalid"})
+            continue
+        seen.add(email)
+
+        existing = database.query(UserProfile).filter(func.lower(UserProfile.email) == email).first()
+        if existing:
+            results.append({"email": email, "full_name": full_name, "status": "already_exists"})
+            continue
+
+        try:
+            supabase_user_id, action_link = _supabase_generate_invite_link(email, full_name)
+        except SupabaseUserExists:
+            results.append({"email": email, "full_name": full_name, "status": "already_has_login"})
+            continue
+        except Exception as e:
+            logger.error(f"Supabase invite failed for {email}: {e}")
+            results.append({"email": email, "full_name": full_name, "status": "error"})
+            continue
+
+        tenant = Tenant(name=full_name or email)
+        database.add(tenant)
+        database.flush()
+        profile = UserProfile(
+            supabase_user_id=supabase_user_id,
+            email=email,
+            full_name=full_name,
+            role="owner",
+            tenant_id=tenant.id,
+            is_approved=True,
+        )
+        database.add(profile)
+        database.flush()
+        _log_admin_action(database, admin, "THERAPIST_INVITED", "therapist", profile.id)
+        database.commit()
+
+        sent = send_therapist_invite_email(email, full_name, action_link)
+        results.append({
+            "email": email,
+            "full_name": full_name,
+            "status": "invited" if sent else "email_failed",
+            # Only handed back when the email failed, so the admin can pass it on manually.
+            "link": None if sent else action_link,
+        })
+
+    return {"results": results}
 
 
 ############################################
